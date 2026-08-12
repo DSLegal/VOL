@@ -1,0 +1,280 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+
+type View = "lab" | "seasonality" | "sessions" | "regimes" | "execution" | "evidence";
+type PeriodType = "month" | "week";
+type Unit = "points" | "mae_atr";
+
+type SeasonalRow = {
+  periodType: PeriodType; period: string; order: number; horizon: number; session: string;
+  direction: string; observations: number; days: number; years: number; sampleBand: string;
+  p50Points: number; p80Points: number; p90Points: number; p50Atr: number; p80Atr: number; p90Atr: number;
+};
+
+type Data = {
+  meta: { generatedAt: string; analysisGeneratedAt: string; analysisManifestSha256: string; rawDbnSha256: string; records: number; firstTimestamp: string; lastTimestamp: string; timezone: string; bootstrapReplications: number; seed: number; verifiedFiles: number; disclaimer: string };
+  seasonal: SeasonalRow[];
+  seasonalCI: Array<{ periodType: PeriodType; period: string; order: number; horizon: number; session: string; unit: Unit; estimate: number; low: number; high: number; observations: number; days: number }>;
+  sessionMetrics: Array<{ horizon: number; session: string; direction: string; unit: Unit | "basis_points"; observations: number; days: number; p50: number; p80: number; p90: number }>;
+  sessionCI: Array<{ horizon: number; session: string; unit: Unit | "basis_points"; estimate: number; low: number; high: number }>;
+  chronological: Array<{ week: string; session: string; days: number; p80Points: number; p80Atr: number }>;
+  rolling: Array<{ date: string; session: string; value: number }>;
+  cashOpen: Array<{ horizon: number; time: string; unit: Unit | "basis_points"; observations: number; days: number; p50: number; p80: number; p90: number }>;
+  execution: Array<{ metric: string; probability: number; estimate: number; low: number; high: number; unit: string }>;
+  riskCompatibility: Array<{ quantity: number; records: number; maximumStop: number; medianDistance: number; p90Distance: number; compatibilityRate: number }>;
+  thesis: Array<{ gapMinutes: number; groups: number; losingGroups: number; medianNetPnl: number; p90MinimumObservedRisk: number; maxCumulativeQuantity: number; maxLiveSize: number }>;
+  accountDays: Array<{ account: string; day: string; records: number; netPnl: number; worstRealizedPnl: number; maxLiveContracts: number }>;
+  afterLoss: Array<{ metric: string; days: number; sumPnl: number; meanPnl: number; medianPnl: number; positiveFraction: number }>;
+  overlap: Array<{ session: string; unit: Unit; days: number; nqP80: number; mnqP80: number; ratio: number }>;
+  claims: Array<{ id: string; classification: string; claim: string; source: string; sample: string; method: string }>;
+  quality: Array<{ id: string; scope: string; metric: string; value: string; status: string; notes: string }>;
+};
+
+const NAV: Array<{ id: View; label: string; short: string }> = [
+  { id: "lab", label: "Stop-Loss Lab", short: "Lab" },
+  { id: "seasonality", label: "Month & Week", short: "Season" },
+  { id: "sessions", label: "Session Compare", short: "Sessions" },
+  { id: "regimes", label: "Regime History", short: "History" },
+  { id: "execution", label: "Execution Reality", short: "Execution" },
+  { id: "evidence", label: "Evidence", short: "Evidence" },
+];
+
+const SESSION_ORDER = ["Asia KZ", "London KZ", "Pre-Market OR", "08:30 OR", "NY AM OR", "NY AM SB", "NY Lunch", "NY PM KZ", "NY 1st DR"];
+const MONTH_SHORT: Record<string, string> = { January: "Jan", February: "Feb", March: "Mar", April: "Apr", May: "May", June: "Jun", July: "Jul", August: "Aug", September: "Sep", October: "Oct", November: "Nov", December: "Dec" };
+
+const fmt = (value: number, digits = 2) => new Intl.NumberFormat("en-GB", { maximumFractionDigits: digits }).format(value);
+const money = (value: number) => new Intl.NumberFormat("en-GB", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value);
+const sampleTone = (days: number) => days < 20 ? "thin" : days < 40 ? "watch" : "solid";
+
+function Toggle<T extends string>({ value, options, onChange, label }: { value: T; options: Array<{ value: T; label: string }>; onChange: (v: T) => void; label: string }) {
+  return <div className="toggle" role="group" aria-label={label}>{options.map(option => <button key={option.value} className={value === option.value ? "active" : ""} onClick={() => onChange(option.value)}>{option.label}</button>)}</div>;
+}
+
+function Select({ label, value, onChange, children }: { label: string; value: string | number; onChange: (value: string) => void; children: React.ReactNode }) {
+  return <label className="field"><span>{label}</span><select value={value} onChange={event => onChange(event.target.value)}>{children}</select></label>;
+}
+
+function LineChart({ points, active, onPick, colour = "var(--lime)", formatValue = (v: number) => fmt(v, 2), compact = false }: {
+  points: Array<{ label: string; value: number; detail?: string }>;
+  active?: string; onPick?: (label: string) => void; colour?: string; formatValue?: (value: number) => string; compact?: boolean;
+}) {
+  if (!points.length) return <div className="empty">No matching observations.</div>;
+  const width = 920, height = compact ? 190 : 290, left = 48, right = 22, top = 24, bottom = 42;
+  const values = points.map(point => point.value);
+  const min = Math.min(...values), max = Math.max(...values), padding = Math.max((max - min) * .18, max * .04, .1);
+  const yMin = Math.max(0, min - padding), yMax = max + padding;
+  const x = (index: number) => left + (index / Math.max(1, points.length - 1)) * (width - left - right);
+  const y = (value: number) => top + ((yMax - value) / Math.max(.0001, yMax - yMin)) * (height - top - bottom);
+  const path = points.map((point, index) => `${index ? "L" : "M"}${x(index)},${y(point.value)}`).join(" ");
+  const ticks = [0, .25, .5, .75, 1].map(t => yMin + (yMax - yMin) * t);
+  const labelEvery = Math.max(1, Math.ceil(points.length / 10));
+  return <div className="chart-wrap">
+    <svg className="line-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Historical volatility line chart">
+      <defs><linearGradient id={`area-${points.length}`} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={colour} stopOpacity=".26"/><stop offset="1" stopColor={colour} stopOpacity="0"/></linearGradient></defs>
+      {ticks.map(tick => <g key={tick}><line x1={left} x2={width - right} y1={y(tick)} y2={y(tick)} className="grid-line"/><text x={left - 10} y={y(tick) + 4} textAnchor="end" className="axis-label">{formatValue(tick)}</text></g>)}
+      <path d={`${path} L${x(points.length - 1)},${height - bottom} L${x(0)},${height - bottom} Z`} fill={`url(#area-${points.length})`}/>
+      <path d={path} fill="none" stroke={colour} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round"/>
+      {points.map((point, index) => <g key={`${point.label}-${index}`} className={onPick ? "chart-point clickable" : "chart-point"} onClick={() => onPick?.(point.label)} role={onPick ? "button" : undefined} tabIndex={onPick ? 0 : undefined} onKeyDown={event => { if (event.key === "Enter" || event.key === " ") onPick?.(point.label); }}>
+        <circle cx={x(index)} cy={y(point.value)} r={active === point.label ? 7 : points.length > 100 ? 2.2 : 4} fill={active === point.label ? "var(--paper)" : colour} stroke={active === point.label ? colour : "none"} strokeWidth="3"><title>{point.label}: {formatValue(point.value)}{point.detail ? ` · ${point.detail}` : ""}</title></circle>
+        {(index % labelEvery === 0 || index === points.length - 1) && <text x={x(index)} y={height - 15} textAnchor="middle" className="axis-label">{point.label}</text>}
+      </g>)}
+    </svg>
+  </div>;
+}
+
+function QuantileBand({ row, structuralStop }: { row: SeasonalRow; structuralStop: number }) {
+  const max = Math.max(row.p90Points * 1.18, structuralStop * 1.12, 1);
+  const pct = (value: number) => `${Math.min(100, (value / max) * 100)}%`;
+  return <div className="tunnel" aria-label="Historical adverse excursion reference bands">
+    <div className="tunnel-scale"><span>0</span><span>{fmt(max, 1)} pts</span></div>
+    <div className="tunnel-track">
+      <div className="tunnel-segment q50" style={{ width: pct(row.p50Points) }} />
+      <div className="tunnel-segment q80" style={{ left: pct(row.p50Points), width: `calc(${pct(row.p80Points)} - ${pct(row.p50Points)})` }} />
+      <div className="tunnel-segment q90" style={{ left: pct(row.p80Points), width: `calc(${pct(row.p90Points)} - ${pct(row.p80Points)})` }} />
+      <div className="stop-marker" style={{ left: pct(structuralStop) }}><span>Your structure</span><strong>{fmt(structuralStop, 1)}</strong></div>
+      {[{ label: "P50", value: row.p50Points }, { label: "P80", value: row.p80Points }, { label: "P90", value: row.p90Points }].map(item => <div key={item.label} className="quantile-marker" style={{ left: pct(item.value) }}><span>{item.label}</span><strong>{fmt(item.value, 1)}</strong></div>)}
+    </div>
+    <div className="tunnel-legend"><span><i className="q50"/>Typical half</span><span><i className="q80"/>Wider noise</span><span><i className="q90"/>Tail context</span></div>
+  </div>;
+}
+
+function EvidenceNote({ children }: { children: React.ReactNode }) { return <div className="evidence-note"><span>i</span><p>{children}</p></div>; }
+
+export default function VolatilityDashboard() {
+  const [data, setData] = useState<Data | null>(null);
+  const [loadError, setLoadError] = useState("");
+  const [view, setView] = useState<View>("lab");
+  const [session, setSession] = useState("NY AM OR");
+  const [horizon, setHorizon] = useState(5);
+  const [direction, setDirection] = useState("pooled");
+  const [periodType, setPeriodType] = useState<PeriodType>("month");
+  const [period, setPeriod] = useState("March");
+  const [unit, setUnit] = useState<Unit>("mae_atr");
+  const [currentAtr, setCurrentAtr] = useState(7.5);
+  const [structuralStop, setStructuralStop] = useState(18);
+  const [riskBudget, setRiskBudget] = useState(150);
+  const [cost, setCost] = useState(1);
+  const [yearStart, setYearStart] = useState(2014);
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
+
+  useEffect(() => {
+    fetch("./data/dashboard-data.json")
+      .then(response => { if (!response.ok) throw new Error(`Data returned ${response.status}`); return response.json(); })
+      .then(setData)
+      .catch(error => setLoadError(error instanceof Error ? error.message : "Unable to load data"));
+  }, []);
+
+  const periods = useMemo(() => {
+    if (!data) return [];
+    const unique = new Map<number, string>();
+    data.seasonal.filter(row => row.periodType === periodType).forEach(row => unique.set(row.order, row.period));
+    return [...unique.entries()].sort((a, b) => a[0] - b[0]).map(([, label]) => label);
+  }, [data, periodType]);
+
+  const resolvedPeriod = periods.includes(period) ? period : periods[0] ?? period;
+  const reference = useMemo(() => data?.seasonal.find(row => row.periodType === periodType && row.period === resolvedPeriod && row.session === session && row.horizon === horizon && row.direction === direction) ?? null, [data, periodType, resolvedPeriod, session, horizon, direction]);
+  const series = useMemo(() => (data?.seasonal.filter(row => row.periodType === periodType && row.session === session && row.horizon === horizon && row.direction === direction).sort((a, b) => a.order - b.order) ?? []), [data, periodType, session, horizon, direction]);
+  const valueOf = (row: SeasonalRow, q: 50 | 80 | 90) => unit === "mae_atr" ? row[`p${q}Atr`] : row[`p${q}Points`];
+
+  if (loadError) return <main className="load-state"><div><span className="brand-mark">V</span><h1>The dashboard data did not load.</h1><p>{loadError}</p><button onClick={() => location.reload()}>Try again</button></div></main>;
+  if (!data || !reference) return <main className="load-state"><div><span className="brand-mark pulse">V</span><h1>Preparing the volatility lab…</h1><p>Loading the verified historical extract.</p></div></main>;
+
+  const riskPerContract = structuralStop * 2 + cost;
+  const wholeContracts = Math.max(0, Math.floor(riskBudget / riskPerContract));
+  const usedRisk = wholeContracts * riskPerContract;
+  const contextPosition = structuralStop < reference.p50Points ? "inside the historical P50 reference" : structuralStop < reference.p80Points ? "between P50 and P80" : structuralStop < reference.p90Points ? "between P80 and P90" : "beyond the historical P90 reference";
+
+  return <div className="app-shell">
+    <header className="topbar">
+      <button className="brand" onClick={() => setView("lab")}><span className="brand-mark">V</span><span><strong>VOL / LAB</strong><small>NQ → MNQ context</small></span></button>
+      <nav aria-label="Dashboard sections">{NAV.map(item => <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => setView(item.id)}><span className="nav-full">{item.label}</span><span className="nav-short">{item.short}</span></button>)}</nav>
+      <button className="evidence-trigger" onClick={() => setEvidenceOpen(true)}><span className="status-dot"/>Evidence</button>
+    </header>
+
+    <main>
+      {view === "lab" && <section className="page lab-page">
+        <div className="page-head">
+          <div><p className="eyebrow">Historical market-noise context</p><h1>Place structure first.<br/><em>Then test its breathing room.</em></h1><p className="lead">Explore how far NQ moved against a five- or ten-minute entry before the horizon ended. Use the history to question a stop—not to invent one.</p></div>
+          <div className="coverage-stamp"><span>Verified extract</span><strong>{fmt(data.meta.records, 0)}</strong><small>records · {data.meta.firstTimestamp.slice(0, 4)}–{data.meta.lastTimestamp.slice(0, 4)}</small></div>
+        </div>
+
+        <div className="workbench">
+          <aside className="control-rail">
+            <div className="rail-heading"><span>01</span><div><strong>Market lens</strong><small>Choose the historical slice</small></div></div>
+            <Select label="Session" value={session} onChange={setSession}>{SESSION_ORDER.map(item => <option key={item}>{item}</option>)}</Select>
+            <div className="field"><span>Entry horizon</span><Toggle value={String(horizon)} onChange={value => setHorizon(Number(value))} label="Entry horizon" options={[{ value: "5", label: "5 min" }, { value: "10", label: "10 min" }]}/></div>
+            <div className="field"><span>Direction lens</span><Toggle value={direction} onChange={setDirection} label="Direction" options={[{ value: "pooled", label: "Both" }, { value: "long", label: "Long" }, { value: "short", label: "Short" }]}/></div>
+            <div className="field"><span>Calendar lens</span><Toggle value={periodType} onChange={setPeriodType} label="Calendar grouping" options={[{ value: "month", label: "Month" }, { value: "week", label: "ISO week" }]}/></div>
+            <Select label={periodType === "month" ? "Month" : "Week of year"} value={resolvedPeriod} onChange={setPeriod}>{periods.map(item => <option key={item}>{item}</option>)}</Select>
+            <div className="field"><span>Display</span><Toggle value={unit} onChange={setUnit} label="Display unit" options={[{ value: "mae_atr", label: "ATR-normalised" }, { value: "points", label: "Points" }]}/></div>
+            <button className="plain-link" onClick={() => setEvidenceOpen(true)}>How this is calculated →</button>
+          </aside>
+
+          <div className="lab-canvas">
+            <div className="canvas-kicker"><div><span className={`sample-chip ${sampleTone(reference.days)}`}>{reference.days} trading days</span><span>{reference.years} years represented</span></div><span>{session} · {horizon}m · {direction}</span></div>
+            <div className="quantile-grid">
+              {[50, 80, 90].map((q, index) => <article className={`quantile-card q${q}`} key={q}><div><span>P{q}</span><small>{index === 0 ? "Typical" : index === 1 ? "Wider" : "Tail"}</small></div><strong>{fmt(valueOf(reference, q as 50 | 80 | 90), unit === "points" ? 1 : 2)}</strong><em>{unit === "points" ? "NQ points" : "× session ATR"}</em></article>)}
+            </div>
+            <div className="chart-panel">
+              <div className="panel-head"><div><p className="eyebrow">{periodType === "month" ? "Month-of-year" : "ISO week-of-year"} profile</p><h2>P80 adverse excursion</h2></div><div className="active-value"><span>{resolvedPeriod}</span><strong>{fmt(valueOf(reference, 80), unit === "points" ? 1 : 2)}</strong></div></div>
+              <LineChart points={series.map(row => ({ label: periodType === "month" ? MONTH_SHORT[row.period] : row.period, value: valueOf(row, 80), detail: `${row.days} days` }))} active={periodType === "month" ? MONTH_SHORT[resolvedPeriod] : resolvedPeriod} onPick={label => setPeriod(periodType === "month" ? Object.keys(MONTH_SHORT).find(key => MONTH_SHORT[key] === label) ?? resolvedPeriod : label)} formatValue={value => `${fmt(value, unit === "points" ? 1 : 2)}${unit === "mae_atr" ? "×" : ""}`}/>
+              <p className="chart-caption">Each point pools the same {periodType === "month" ? "month" : "ISO week number"} across available years. P80 means 80% of measured adverse excursions were at or below this level.</p>
+            </div>
+          </div>
+        </div>
+
+        <section className="decision-zone">
+          <div className="section-title"><span>02</span><div><p className="eyebrow">Structure check</p><h2>Put your independent stop beside history</h2></div></div>
+          <div className="decision-grid">
+            <article className="decision-card large"><div className="input-row"><label><span>Your structural stop</span><div><input type="number" min="0.25" step="0.25" value={structuralStop} onChange={event => setStructuralStop(Math.max(.25, Number(event.target.value)))} /><b>points</b></div></label><label><span>Current session ATR</span><div><input type="number" min="0.25" step="0.25" value={currentAtr} onChange={event => setCurrentAtr(Math.max(.25, Number(event.target.value)))} /><b>points</b></div></label><div className="context-callout"><span>This sits</span><strong>{contextPosition}</strong><small>Normalised P80 translated at current ATR: {fmt(reference.p80Atr * currentAtr, 1)} pts</small></div></div><QuantileBand row={reference} structuralStop={structuralStop}/><EvidenceNote>The coloured bands use historical raw points. The current-ATR translation is a separate normalised comparison. Neither is a pass/fail line; price structure, liquidity and invalidation still define the stop.</EvidenceNote></article>
+            <article className="decision-card sizing"><p className="eyebrow">MNQ risk translation</p><h3>Whole-contract view</h3><div className="mini-inputs"><label><span>Risk budget</span><div><b>$</b><input type="number" min="1" value={riskBudget} onChange={event => setRiskBudget(Math.max(1, Number(event.target.value)))}/></div></label><label><span>Round-trip cost</span><div><b>$</b><input type="number" min="0" step=".25" value={cost} onChange={event => setCost(Math.max(0, Number(event.target.value)))}/></div></label></div><div className="sizing-result"><span>Maximum whole MNQ under inputs</span><strong>{wholeContracts}</strong><small>{money(usedRisk)} modelled risk · {money(riskBudget - usedRisk)} unallocated</small></div><div className="formula">$2 × {fmt(structuralStop, 2)} points + ${fmt(cost, 2)} = <strong>${fmt(riskPerContract, 2)}</strong> / MNQ</div><p className="fineprint">Mechanical arithmetic only; not a size recommendation.</p></article>
+          </div>
+        </section>
+      </section>}
+
+      {view === "seasonality" && (
+        <SeasonalityView data={data} session={session} setSession={setSession} horizon={horizon} setHorizon={setHorizon} periodType={periodType} setPeriodType={setPeriodType} period={period} setPeriod={setPeriod}/>
+      )}
+      {view === "sessions" && (
+        <SessionsView data={data} horizon={horizon} setHorizon={setHorizon}/>
+      )}
+      {view === "regimes" && (
+        <RegimesView data={data} session={session} setSession={setSession} yearStart={yearStart} setYearStart={setYearStart}/>
+      )}
+      {view === "execution" && <ExecutionView data={data}/>}
+      {view === "evidence" && <EvidenceView data={data}/>}
+    </main>
+
+    <footer><div><span className="brand-mark small">V</span><p><strong>Historical Volatility Stop-Loss Lab</strong><br/>Evidence-controlled research interface</p></div><p>{data.meta.disclaimer}</p><button onClick={() => setEvidenceOpen(true)}>Data receipt</button></footer>
+
+    {evidenceOpen && <div className="drawer-backdrop"><button className="backdrop-close" onClick={() => setEvidenceOpen(false)} aria-label="Close evidence receipt"/><aside className="evidence-drawer" aria-modal="true" role="dialog" aria-label="Evidence receipt"><button className="drawer-close" onClick={() => setEvidenceOpen(false)} aria-label="Close">×</button><p className="eyebrow">Evidence receipt</p><h2>Traceable by design</h2><p>This browser dataset was generated from the controlled CSV outputs and checked against their SHA-256 manifest before export.</p><dl><div><dt>Market records</dt><dd>{fmt(data.meta.records, 0)}</dd></div><div><dt>Coverage</dt><dd>{data.meta.firstTimestamp} → {data.meta.lastTimestamp}</dd></div><div><dt>Grouping timezone</dt><dd>{data.meta.timezone}</dd></div><div><dt>Bootstrap</dt><dd>{fmt(data.meta.bootstrapReplications, 0)} replications · seed {data.meta.seed}</dd></div><div><dt>Verified dashboard inputs</dt><dd>{data.meta.verifiedFiles} files</dd></div></dl><div className="hash"><span>Analysis manifest SHA-256</span><code>{data.meta.analysisManifestSha256}</code></div><div className="hash"><span>Raw NQ DBN SHA-256</span><code>{data.meta.rawDbnSha256}</code></div><button className="drawer-action" onClick={() => { setEvidenceOpen(false); setView("evidence"); }}>Open evidence register</button></aside></div>}
+  </div>;
+}
+
+function PageIntro({ eyebrow, title, body, side }: { eyebrow: string; title: string; body: string; side?: React.ReactNode }) { return <div className="subpage-head"><div><p className="eyebrow">{eyebrow}</p><h1>{title}</h1><p>{body}</p></div>{side}</div>; }
+
+function SeasonalityView({ data, session, setSession, horizon, setHorizon, periodType, setPeriodType, period, setPeriod }: { data: Data; session: string; setSession: (v: string) => void; horizon: number; setHorizon: (v: number) => void; periodType: PeriodType; setPeriodType: (v: PeriodType) => void; period: string; setPeriod: (v: string) => void }) {
+  const monthly = data.seasonal.filter(row => row.periodType === "month" && row.horizon === horizon && row.direction === "pooled");
+  const monthRows = [...new Set(monthly.map(row => row.period))].map(month => ({ month, cells: SESSION_ORDER.map(name => monthly.find(row => row.period === month && row.session === name)!) })).sort((a, b) => a.cells[0].order - b.cells[0].order);
+  const allValues = monthRows.flatMap(row => row.cells.map(cell => cell.p80Atr));
+  const min = Math.min(...allValues), max = Math.max(...allValues);
+  const heat = (value: number) => { const t = (value - min) / Math.max(.001, max - min); return `color-mix(in srgb, var(--rust) ${Math.round(t * 76)}%, var(--panel-2))`; };
+  const weeks = data.seasonal.filter(row => row.periodType === "week" && row.horizon === horizon && row.direction === "pooled" && row.session === session).sort((a, b) => a.order - b.order);
+  const selectedWeek = weeks.find(row => row.period === period) ?? weeks[0];
+  return <section className="page subpage">
+    <PageIntro eyebrow="Seasonal lens" title="When does volatility tend to breathe wider?" body="Compare month-of-year and ISO week-of-year patterns. The normalised view helps separate price-level inflation from genuinely different session behaviour." side={<div className="head-controls"><Select label="Session" value={session} onChange={setSession}>{SESSION_ORDER.map(item => <option key={item}>{item}</option>)}</Select><div className="field"><span>Horizon</span><Toggle value={String(horizon)} onChange={v => setHorizon(Number(v))} label="Horizon" options={[{ value: "5", label: "5m" }, { value: "10", label: "10m" }]}/></div></div>}/>
+    <div className="story-grid">
+      <article className="story-card heatmap-card"><div className="panel-head"><div><p className="eyebrow">P80 MAE ÷ session ATR</p><h2>Month × session map</h2></div><span className="unit-pill">ATR-normalised</span></div><div className="heatmap-scroll"><div className="heatmap" style={{ gridTemplateColumns: `88px repeat(${SESSION_ORDER.length}, minmax(62px,1fr))` }}><span/>{SESSION_ORDER.map(name => <span className="heat-head" key={name}>{name.replace(" ", "\n")}</span>)}{monthRows.flatMap(row => [<button className="month-label" key={`${row.month}-label`} onClick={() => { setPeriodType("month"); setPeriod(row.month); }}>{MONTH_SHORT[row.month]}</button>, ...row.cells.map(cell => <button key={`${row.month}-${cell.session}`} style={{ background: heat(cell.p80Atr) }} className="heat-cell" onClick={() => { setSession(cell.session); setPeriodType("month"); setPeriod(row.month); }}><strong>{fmt(cell.p80Atr, 2)}</strong><span>{cell.days}d</span></button>)])}</div></div><div className="heat-scale"><span>Lower in this map</span><i/><span>Higher in this map</span></div><EvidenceNote>Colour is relative to this heatmap, not a universal risk scale. Monthly confidence intervals overlap substantially, so small colour differences should not be treated as stable edges.</EvidenceNote></article>
+      <article className="story-card seasonal-finding"><p className="eyebrow">What stands out</p><h2>Raw points and normalised movement tell different stories.</h2><div className="finding-number"><span>March · NY AM OR · 5m</span><strong>27.0<small> pts</small></strong><p>Highest monthly raw P80 in the headline slice, based on 298 eligible days.</p></div><div className="finding-pair"><div><span>Highest normalised</span><strong>October</strong><small>2.458× ATR</small></div><div><span>Lowest normalised</span><strong>February</strong><small>2.390× ATR</small></div></div><p className="caution-copy">The gap is modest. Use it as context for questioning assumptions, not as a monthly trading rule.</p></article>
+    </div>
+    <article className="story-card wide"><div className="panel-head"><div><p className="eyebrow">{session} · pooled direction</p><h2>ISO week-of-year profile</h2></div><Toggle value={periodType} onChange={setPeriodType} label="Season view" options={[{ value: "month", label: "Month" }, { value: "week", label: "Week" }]}/></div><LineChart points={weeks.map(row => ({ label: row.period, value: row.p80Atr, detail: `${row.days} eligible days` }))} active={selectedWeek?.period} onPick={label => { setPeriodType("week"); setPeriod(label); }} formatValue={v => `${fmt(v, 2)}×`}/><div className="selected-strip"><div><span>Highest observed headline week</span><strong>W40 · 2.614×</strong><small>95% CI 2.492–2.735 · 71 days</small></div><div><span>Lowest observed headline week</span><strong>W27 · 2.243×</strong><small>95% CI 2.140–2.344 · 71 days</small></div><div className={selectedWeek && selectedWeek.days < 40 ? "sample-alert" : "sample-ok"}><span>Selected {selectedWeek?.period ?? "week"}</span><strong>{selectedWeek ? `${selectedWeek.days} days` : "—"}</strong><small>{selectedWeek && selectedWeek.days < 20 ? "Thin sample: interpret cautiously" : "Sample shown before interpretation"}</small></div></div></article>
+  </section>;
+}
+
+function SessionsView({ data, horizon, setHorizon }: { data: Data; horizon: number; setHorizon: (v: number) => void }) {
+  const rows = SESSION_ORDER.map(session => data.sessionMetrics.find(row => row.horizon === horizon && row.session === session && row.direction === "pooled" && row.unit === "mae_atr")!).filter(Boolean);
+  const cis = data.sessionCI.filter(row => row.horizon === horizon && row.unit === "mae_atr");
+  const max = Math.max(...rows.map(row => row.p90));
+  const cash = data.cashOpen.filter(row => row.horizon === horizon && row.unit === "mae_atr").map(row => ({ label: row.time, value: row.p80, detail: `${row.days} days` }));
+  return <section className="page subpage">
+    <PageIntro eyebrow="Session comparator" title="A trading day does not move at one speed." body="Compare pooled long/short adverse excursion across the defined sessions. All rows use the same horizon and the same ATR-normalised scale." side={<div className="head-controls"><div className="field"><span>Horizon</span><Toggle value={String(horizon)} onChange={v => setHorizon(Number(v))} label="Horizon" options={[{ value: "5", label: "5m" }, { value: "10", label: "10m" }]}/></div></div>}/>
+    <div className="session-layout"><article className="story-card"><div className="panel-head"><div><p className="eyebrow">P50 / P80 / P90</p><h2>Session breathing-room map</h2></div><span className="unit-pill">× session ATR</span></div><div className="whiskers">{rows.map(row => { const ci = cis.find(item => item.session === row.session); return <div className="whisker" key={row.session}><div className="whisker-label"><strong>{row.session}</strong><span>{fmt(row.days, 0)} days</span></div><div className="whisker-track"><div className="whisker-tail" style={{ left: `${row.p50 / max * 100}%`, width: `${(row.p90 - row.p50) / max * 100}%` }}/><i className="dot p50" style={{ left: `${row.p50 / max * 100}%` }}><span>P50 {fmt(row.p50, 2)}</span></i><i className="dot p80" style={{ left: `${row.p80 / max * 100}%` }}><span>P80 {fmt(row.p80, 2)}</span></i><i className="dot p90" style={{ left: `${row.p90 / max * 100}%` }}><span>P90 {fmt(row.p90, 2)}</span></i>{ci && <div className="ci-band" style={{ left: `${ci.low / max * 100}%`, width: `${(ci.high - ci.low) / max * 100}%` }}><span>95% CI</span></div>}</div><strong className="row-value">{fmt(row.p80, 2)}×</strong></div>})}</div><div className="axis-row"><span>0</span><span>{fmt(max, 1)}×</span></div><EvidenceNote>The narrow line around each P80 dot is its whole-day clustered 95% confidence interval. Overlapping intervals mean rank order should not be overstated.</EvidenceNote></article><article className="story-card"><div className="panel-head"><div><p className="eyebrow">08:30 onward · New York</p><h2>Cash-open pulse</h2></div><span className="unit-pill">5-minute bins</span></div><LineChart points={cash} compact formatValue={v => `${fmt(v, 2)}×`}/><p className="chart-caption">Independent entry snapshots in each clock-time bin. This is a volatility shape, not a signal to enter.</p><div className="session-note"><span>Why normalise?</span><p>One NQ point in 2012 did not represent the same market scale as one point in 2026. Dividing by session ATR makes long-history comparisons more honest.</p></div></article></div>
+    <article className="story-card wide"><div className="panel-head"><div><p className="eyebrow">NQ history applied to MNQ context</p><h2>Contract-overlap cross-check</h2></div><span className="unit-pill">17 common days</span></div><div className="overlap-grid">{data.overlap.filter(row => row.unit === "mae_atr").map(row => <div key={row.session}><span>{row.session}</span><div><i style={{ width: `${Math.min(100, row.nqP80 / 3 * 100)}%` }}/><b>NQ {fmt(row.nqP80, 2)}×</b></div><div><i style={{ width: `${Math.min(100, row.mnqP80 / 3 * 100)}%` }}/><b>MNQ {fmt(row.mnqP80, 2)}×</b></div><small>ratio {fmt(row.ratio, 3)}</small></div>)}</div><p className="chart-caption">A short overlap is a cross-check, not proof of permanent equivalence. Dollar multipliers are never mixed: MNQ uses $2 per point.</p></article>
+  </section>;
+}
+
+function RegimesView({ data, session, setSession, yearStart, setYearStart }: { data: Data; session: string; setSession: (v: string) => void; yearStart: number; setYearStart: (v: number) => void }) {
+  const rolling = data.rolling.filter(row => row.session === session && Number(row.date.slice(0, 4)) >= yearStart).map(row => ({ label: row.date.slice(2, 7), value: row.value, detail: row.date }));
+  const chronological = data.chronological.filter(row => row.session === session && Number(row.week.slice(0, 4)) >= yearStart);
+  const yearly = [...new Set(chronological.map(row => row.week.slice(0, 4)))].map(year => { const values = chronological.filter(row => row.week.startsWith(year)).map(row => row.p80Atr); values.sort((a, b) => a - b); return { label: year, value: values[Math.floor(values.length * .5)] ?? 0, detail: `${values.length} weeks` }; });
+  return <section className="page subpage">
+    <PageIntro eyebrow="Regime history" title="Seasonality is not the whole story." body="Use chronological and rolling views to see when the market’s character changed. A stop informed by an old regime may have very different breathing room today." side={<div className="head-controls"><Select label="Session" value={session} onChange={setSession}>{SESSION_ORDER.map(item => <option key={item}>{item}</option>)}</Select></div>}/>
+    <article className="story-card wide"><div className="panel-head"><div><p className="eyebrow">60 complete sessions · five-minute horizon</p><h2>Rolling P80 stability</h2></div><span className="unit-pill">× session ATR</span></div><LineChart points={rolling} formatValue={v => `${fmt(v, 2)}×`}/><div className="range-control"><label><span>Show history from</span><strong>{yearStart}</strong><input type="range" min="2010" max="2026" value={yearStart} onChange={event => setYearStart(Number(event.target.value))}/><div><span>2010</span><span>2026</span></div></label></div><EvidenceNote>Rolling windows overlap, so nearby points are related. Read this as a regime trace rather than thousands of independent tests.</EvidenceNote></article>
+    <div className="story-grid equal"><article className="story-card"><div className="panel-head"><div><p className="eyebrow">Chronological ISO weeks</p><h2>Median weekly P80 by year</h2></div></div><LineChart points={yearly} compact formatValue={v => `${fmt(v, 2)}×`}/><p className="chart-caption">Each year marker summarises the median of its complete weekly P80 estimates for the selected session.</p></article><article className="story-card regime-copy"><p className="eyebrow">How a trader can use this</p><h2>Ask whether today resembles the pooled past.</h2><ol><li><span>1</span><p><strong>Define invalidation first.</strong> Mark the structure that proves the trade idea wrong.</p></li><li><span>2</span><p><strong>Compare its room.</strong> See whether that distance is ordinary or unusual for the selected session.</p></li><li><span>3</span><p><strong>Check the regime.</strong> If rolling volatility has shifted, pooled seasonal history may deserve less weight.</p></li><li><span>4</span><p><strong>Translate to MNQ.</strong> Size only after stop distance is independently set.</p></li></ol></article></div>
+  </section>;
+}
+
+function ExecutionView({ data }: { data: Data }) {
+  const holding = data.execution.filter(row => row.metric === "holding_seconds_contract_weighted");
+  const maxHolding = Math.max(...holding.map(row => row.high));
+  const accountMax = Math.max(...data.accountDays.map(row => Math.abs(row.netPnl)), 1);
+  return <section className="page subpage">
+    <PageIntro eyebrow="Execution reality" title="A clean model meets messy trading behaviour." body="The execution file describes what happened in the supplied records. It does not prove that a stop was placed, followed, or optimal."/>
+    <div className="story-grid equal"><article className="story-card"><div className="panel-head"><div><p className="eyebrow">Contract-weighted holding time</p><h2>How long positions stayed open</h2></div><span className="unit-pill">seconds</span></div><div className="holding-bars">{holding.map(row => <div key={row.probability}><span>P{Math.round(row.probability * 100)}</span><div><i style={{ width: `${row.estimate / maxHolding * 100}%` }}/><b>{fmt(row.estimate, 0)}s</b><em style={{ left: `${row.low / maxHolding * 100}%`, width: `${(row.high - row.low) / maxHolding * 100}%` }}/></div><small>95% CI {fmt(row.low, 0)}–{fmt(row.high, 0)}</small></div>)}</div><EvidenceNote>Uncertainty is clustered by identical or copied execution event so duplicated accounts are not treated as independent traders.</EvidenceNote></article><article className="story-card"><div className="panel-head"><div><p className="eyebrow">Supplied account-days</p><h2>Net P&amp;L footprint</h2></div><span className="unit-pill">descriptive only</span></div><div className="pnl-bars">{data.accountDays.map(row => <div key={`${row.account}-${row.day}`}><span>A{row.account}<small>{row.day.slice(5)}</small></span><div className="pnl-axis"><i className={row.netPnl >= 0 ? "positive" : "negative"} style={{ width: `${Math.abs(row.netPnl) / accountMax * 48}%` }}/></div><b className={row.netPnl >= 0 ? "positive-text" : "negative-text"}>{money(row.netPnl)}</b></div>)}</div></article></div>
+    <article className="story-card wide"><div className="panel-head"><div><p className="eyebrow">$150 mechanical compatibility check</p><h2>Recorded losing distance versus quantity</h2></div><span className="unit-pill">not inferred stops</span></div><div className="risk-table"><div className="risk-row header"><span>MNQ qty</span><span>Modelled max stop</span><span>Median losing distance</span><span>P90 losing distance</span><span>Compatible records</span></div>{data.riskCompatibility.map(row => <div className="risk-row" key={row.quantity}><strong>{row.quantity}</strong><span>{fmt(row.maximumStop, 1)} pts</span><span>{fmt(row.medianDistance, 1)} pts</span><span>{fmt(row.p90Distance, 1)} pts</span><div className="compat"><i style={{ width: `${row.compatibilityRate * 100}%` }}/><b>{Math.round(row.compatibilityRate * 100)}%</b><small>n={row.records}</small></div></div>)}</div><p className="chart-caption">Compatibility means the recorded entry-to-exit losing distance fit beneath ($150 ÷ quantity − $1 cost) ÷ $2 per point. No stop order is inferred.</p></article>
+    <div className="story-grid equal"><article className="story-card"><p className="eyebrow">Thesis grouping sensitivity</p><h2>One idea can appear as many fills.</h2><div className="thesis-grid">{data.thesis.map(row => <div key={row.gapMinutes}><strong>{row.gapMinutes}m gap</strong><span>{row.groups} idea groups</span><span>{row.losingGroups} losing groups</span><span>P90 minimum observed risk {money(row.p90MinimumObservedRisk)}</span></div>)}</div></article><article className="story-card"><p className="eyebrow">After-loss descriptions</p><h2>Small samples, copied behaviour.</h2><div className="after-loss">{data.afterLoss.map(row => <div key={row.metric}><span>{row.metric.replace("P&L after ", "After ")}</span><strong>{money(row.medianPnl)}</strong><small>median · {row.days} account-days · {Math.round(row.positiveFraction * 100)}% positive</small></div>)}</div></article></div>
+  </section>;
+}
+
+function EvidenceView({ data }: { data: Data }) {
+  const [filter, setFilter] = useState("all");
+  const classes = ["all", ...new Set(data.claims.map(row => row.classification))];
+  const claims = filter === "all" ? data.claims : data.claims.filter(row => row.classification === filter);
+  return <section className="page subpage evidence-page">
+    <PageIntro eyebrow="Evidence register" title="Every strong sentence needs a receipt." body="Observed facts, derived calculations and interpretations are deliberately separated. Open any entry to see its source and method." side={<div className="receipt-mini"><span>Analysis manifest</span><code>{data.meta.analysisManifestSha256.slice(0, 16)}…</code><small>{data.meta.verifiedFiles} dashboard inputs rechecked</small></div>}/>
+    <div className="method-cards"><article><span>01</span><strong>Observe</strong><p>Count records and reconstruct sessions from controlled source files.</p></article><article><span>02</span><strong>Normalise</strong><p>Express adverse excursion in points, basis points and session ATR.</p></article><article><span>03</span><strong>Uncertainty</strong><p>Resample whole trading days 10,000 times to preserve within-day dependence.</p></article><article><span>04</span><strong>Interpret</strong><p>Describe context without converting it into a strategy rule.</p></article></div>
+    <div className="evidence-layout"><aside><p className="eyebrow">Classification</p>{classes.map(item => <button key={item} className={filter === item ? "active" : ""} onClick={() => setFilter(item)}>{item === "all" ? "All claims" : item}<span>{item === "all" ? data.claims.length : data.claims.filter(row => row.classification === item).length}</span></button>)}<div className="method-note"><strong>Fixed controls</strong><p>New York futures trading-day close-date; degraded session-days excluded; 2026-08-11 analysis cutoff.</p></div></aside><div className="claim-list">{claims.map(row => <details key={row.id}><summary><span>{row.id}</span><div><small>{row.classification}</small><strong>{row.claim}</strong></div><b>+</b></summary><div className="claim-detail"><div><span>Source</span><p>{row.source}</p></div><div><span>Sample</span><p>{row.sample}</p></div><div><span>Method</span><p>{row.method}</p></div></div></details>)}</div></div>
+    <article className="story-card wide quality-card"><div className="panel-head"><div><p className="eyebrow">Data-quality register</p><h2>Known conditions shown, not hidden</h2></div><span className="unit-pill">{data.quality.length} checks</span></div><div className="quality-grid">{data.quality.map(row => <div key={row.id}><span>{row.id} · {row.scope}</span><strong>{row.metric.replaceAll("_", " ")}</strong><p>{row.value}</p><small>{row.notes}</small></div>)}</div></article>
+  </section>;
+}
