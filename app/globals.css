@@ -74,7 +74,7 @@ select { width: 100%; height: 40px; padding: 0 32px 0 11px; }
 .sample-chip.watch { border-color: #b98b2e; }
 .sample-chip.solid { border-color: var(--lime-dark); }
 .quantile-grid { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); margin-bottom: 24px; }
-.quantile-card { position: relative; min-height: 130px; padding: 20px; border-right: 1px solid var(--line); overflow: hidden; }
+.quantile-card { position: relative; min-height: 130px; padding: 20px; border-right: 1px solid var(--line); overflow: visible; }
 .quantile-card:last-child { border-right: 0; }
 .quantile-card::before { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 5px; background: var(--blue); }
 .quantile-card.q80::before { background: var(--lime-dark); }
@@ -98,6 +98,20 @@ select { width: 100%; height: 40px; padding: 0 32px 0 11px; }
 .chart-point.clickable { cursor: pointer; }
 .chart-caption { margin: 10px 0 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
 .empty { padding: 80px 20px; color: var(--muted); text-align: center; }
+
+.info-marker { position: relative; display: inline-flex; z-index: 12; margin-left: 4px; vertical-align: middle; text-align: left; text-transform: none; letter-spacing: normal; }
+.info-marker > button { width: 18px; height: 18px; display: inline-grid; place-items: center; padding: 0; border: 1px solid color-mix(in srgb, var(--blue) 65%, var(--line)); border-radius: 50%; background: color-mix(in srgb, var(--blue) 9%, var(--panel)); color: var(--blue); font: 800 11px/1 Georgia, serif; cursor: help; }
+.info-marker > button:hover, .info-marker > button:focus-visible, .info-marker[data-open="true"] > button { border-color: var(--rust); background: var(--rust); color: var(--paper); }
+.info-popover { position: absolute; z-index: 100; top: calc(100% + 10px); left: 0; width: min(300px, calc(100vw - 34px)); display: none; padding: 15px; border: 1px solid #55594f; background: var(--dark); color: var(--paper); box-shadow: 0 18px 42px rgba(18, 20, 17, .28); font: 12px/1.5 var(--sans); white-space: normal; }
+.info-popover::before { content: ""; position: absolute; left: 7px; bottom: 100%; border: 6px solid transparent; border-bottom-color: var(--dark); }
+.info-marker:hover .info-popover, .info-marker:focus-within .info-popover, .info-marker[data-open="true"] .info-popover { display: block; }
+.info-popover > strong, .info-popover > span, .info-popover > em { display: block; }
+.info-popover > strong { margin-bottom: 6px; color: var(--lime); font: 800 11px/1.25 var(--mono); text-transform: uppercase; letter-spacing: .05em; }
+.info-popover > span { color: #e7e4da; font-weight: 450; }
+.info-popover > em { margin-top: 10px; padding-top: 9px; border-top: 1px solid #484d47; color: #c8cbc4; font-size: 11px; font-style: normal; }
+.info-popover > em b { color: var(--paper); }
+.quantile-card:last-child .info-popover, .context-callout .info-popover, .receipt-mini .info-popover { right: 0; left: auto; }
+.quantile-card:last-child .info-popover::before, .context-callout .info-popover::before, .receipt-mini .info-popover::before { right: 7px; left: auto; }
 
 .decision-zone { padding-top: 64px; }
 .section-title { margin-bottom: 22px; }
@@ -376,6 +390,8 @@ footer button { border: 0; background: none; color: var(--rust); font-weight: 70
   .method-cards { grid-template-columns: 1fr 1fr; }
   .evidence-layout { grid-template-columns: 1fr; }
   .claim-detail, .quality-grid { grid-template-columns: 1fr; }
+  .info-popover { position: fixed; z-index: 110; top: auto; right: 16px !important; bottom: 18px; left: 16px !important; width: auto; max-height: 42vh; overflow: auto; }
+  .info-popover::before { display: none; }
   footer { grid-template-columns: 1fr; padding: 24px 16px; }
 }
 
