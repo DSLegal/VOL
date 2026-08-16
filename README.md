@@ -7,6 +7,8 @@ This is historical context only. It does not provide a signal, choose an invalid
 ## What a trader can do
 
 - Plan either MNQ or NQ risk using separate contract multipliers and editable per-side costs.
+- Start from the latest available indicative NQ front-contract quote; the entry field refreshes automatically while tracking is enabled and remains manually editable.
+- Auto-select the planned month and any active controlled session from `America/New_York` time, while allowing a deliberate manual override.
 - Enter entry price, invalidation price, intended quantity, existing trade-idea risk, slippage and risk limit.
 - Review estimated loss per contract, estimated loss for the intended quantity, combined trade-idea risk and difference from the entered limit.
 - Compare the derived invalidation distance with P50, P80 and P90 historical NQ adverse movement.
@@ -33,6 +35,12 @@ npm.cmd run dev
 ```
 
 The local dev command builds the GitHub Pages static bundle before serving it, so a fresh checkout can run without stale ignored output.
+
+## Automatic planner context
+
+The entry-price default comes from the `quote-feed` branch, which `.github/workflows/nq-quote.yml` refreshes every five minutes from the Yahoo Finance `NQ=F` chart feed. The UI displays the contract, provider timestamp and stale state, and instructs traders to verify the executable price with their broker. This is an indicative convenience value, not a licensed real-time CME feed.
+
+The planned month and session are derived from the current New York clock. If the time falls outside the dashboard's controlled research windows, the app says so instead of assigning an unrelated session. Selecting a session or month manually pauses automatic context selection; the trader can resume it from the session helper.
 
 ## Verify
 

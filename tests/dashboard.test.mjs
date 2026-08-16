@@ -5,13 +5,30 @@ import test from "node:test";
 import {
   calculatePlannedRisk,
   deriveInvalidationDistance,
+  getNewYorkPlannerContext,
   isQuarterPoint,
+  isQuoteStale,
   nearestHorizons,
   resolveHoldingHorizon,
   selectDataSource,
   SUPPORTED_HORIZONS,
   TRADING_INSTRUMENTS,
 } from "../components/dashboard-math.mjs";
+
+test("New York planner context selects only active controlled windows", () => {
+  assert.deepEqual(getNewYorkPlannerContext(new Date("2026-08-17T13:45:00Z")), {
+    month: "August",
+    session: "NY AM OR",
+    sessionValue: "NY AM OR",
+    newYorkTime: "Mon 09:45",
+  });
+  assert.equal(getNewYorkPlannerContext(new Date("2026-08-17T14:15:00Z")).session, "NY AM SB");
+  assert.equal(getNewYorkPlannerContext(new Date("2026-08-17T00:30:00Z")).session, "Asia KZ");
+  assert.equal(getNewYorkPlannerContext(new Date("2026-08-16T20:45:00Z")).sessionValue, "Outside research windows");
+  assert.equal(isQuoteStale("2026-08-17T13:30:00Z", new Date("2026-08-17T13:45:00Z")), false);
+  assert.equal(isQuoteStale("2026-08-17T12:00:00Z", new Date("2026-08-17T13:45:00Z")), true);
+  assert.equal(isQuoteStale("invalid", new Date("2026-08-17T13:45:00Z")), true);
+});
 
 test("holding-time mapping preserves nearest-horizon ties", () => {
   assert.deepEqual(SUPPORTED_HORIZONS, [1, 3, 5, 10, 15, 30]);
@@ -132,6 +149,9 @@ test("dashboard source includes the trader-facing controls and warnings", async 
   const source = await readFile(new URL("../components/VolatilityDashboard.tsx", import.meta.url), "utf8");
   assert.match(source, /Forward adverse-movement horizon/);
   assert.match(source, /planner-data\.json/);
+  assert.match(source, /quote-feed\/nq-quote\.json/);
+  assert.match(source, /Auto-update is on/);
+  assert.match(source, /getNewYorkPlannerContext/);
   assert.match(source, /Choose approximately how long the position normally remains exposed/);
   assert.match(source, /No personalized result yet/);
   assert.match(source, /Actual loss can exceed this estimate/);

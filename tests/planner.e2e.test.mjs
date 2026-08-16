@@ -59,9 +59,29 @@ test("production planner works on desktop/mobile and handles data failure", { ti
   try {
     const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
     const page = await context.newPage();
+    await page.route("**/nq-quote.json*", route => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        instrument: "NQ",
+        symbol: "NQ=F",
+        contract: "Nasdaq 100 Sep 26",
+        price: 20000.25,
+        asOf: new Date().toISOString(),
+        fetchedAt: new Date().toISOString(),
+        provider: "Yahoo Finance",
+        providerUrl: "https://finance.yahoo.com/quote/NQ=F/",
+        exchange: "CME",
+        indicative: true,
+      }),
+    }));
     await page.goto(baseUrl, { waitUntil: "networkidle" });
 
     await assert.doesNotReject(() => page.getByRole("heading", { name: "No personalized result yet." }).waitFor());
+    assert.equal(await page.getByLabel("Entry price").inputValue(), "20000.25");
+    await assert.doesNotReject(() => page.getByText(/Auto-update is on/).waitFor());
+    await page.getByLabel("Planned entry session").selectOption("NY AM OR");
     assert.equal(await page.getByText("Maximum contracts").count(), 0);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
 

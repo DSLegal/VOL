@@ -7,6 +7,49 @@ export const TRADING_INSTRUMENTS = Object.freeze({
   NQ: { dollarsPerPoint: 20, defaultCostPerSide: 1.75 },
 });
 
+export const OUTSIDE_RESEARCH_SESSION = "Outside research windows";
+
+const NEW_YORK_PARTS = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/New_York",
+  weekday: "short",
+  month: "long",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+
+/** Return the controlled research window active at a New York timestamp. */
+export function getNewYorkPlannerContext(date = new Date()) {
+  const parts = Object.fromEntries(NEW_YORK_PARTS.formatToParts(date).map(part => [part.type, part.value]));
+  const minutes = Number(parts.hour) * 60 + Number(parts.minute);
+  const weekday = parts.weekday;
+  const isWeekday = ["Mon", "Tue", "Wed", "Thu", "Fri"].includes(weekday);
+  const asiaTradingDay = weekday === "Sun" || ["Mon", "Tue", "Wed", "Thu"].includes(weekday);
+  let session = null;
+
+  if (asiaTradingDay && minutes >= 20 * 60) session = "Asia KZ";
+  else if (isWeekday && minutes >= 2 * 60 && minutes < 5 * 60) session = "London KZ";
+  else if (isWeekday && minutes >= 7 * 60 && minutes < 7 * 60 + 30) session = "Pre-Market OR";
+  else if (isWeekday && minutes >= 8 * 60 + 30 && minutes < 9 * 60 + 30) session = "08:30 OR";
+  else if (isWeekday && minutes >= 9 * 60 + 30 && minutes < 10 * 60) session = "NY AM OR";
+  else if (isWeekday && minutes >= 10 * 60 && minutes < 11 * 60) session = "NY AM SB";
+  else if (isWeekday && minutes >= 11 * 60 + 30 && minutes < 13 * 60 + 30) session = "NY Lunch";
+  else if (isWeekday && minutes >= 13 * 60 + 30 && minutes < 16 * 60) session = "NY PM KZ";
+
+  return {
+    month: parts.month,
+    session,
+    sessionValue: session ?? OUTSIDE_RESEARCH_SESSION,
+    newYorkTime: `${parts.weekday} ${String(parts.hour).padStart(2, "0")}:${parts.minute}`,
+  };
+}
+
+export function isQuoteStale(asOf, now = new Date(), staleAfterMinutes = 30) {
+  const timestamp = new Date(asOf).getTime();
+  if (!Number.isFinite(timestamp)) return true;
+  return now.getTime() - timestamp > staleAfterMinutes * 60_000;
+}
+
 const finiteNumber = value => typeof value === "number" && Number.isFinite(value);
 
 export function isTickAligned(value, tickSize = TICK_SIZE) {

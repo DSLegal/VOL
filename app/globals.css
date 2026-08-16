@@ -58,6 +58,13 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 .planner-field span { display: block; margin-bottom: 6px; color: var(--muted); font: 800 10px/1.2 var(--mono); letter-spacing: .06em; text-transform: uppercase; }
 .planner-field input, .planner-field select { width: 100%; min-height: 44px; padding: 0 11px; border: 1px solid var(--line); border-radius: 0; background: #fff; color: var(--ink); }
 .planner-field small { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; }
+.planner-field .auto-field-status,
+.planner-field .auto-field-status span { margin: 0; color: var(--muted); font: 11px/1.45 var(--sans); letter-spacing: 0; text-transform: none; }
+.planner-field .auto-field-status { display: grid; gap: 6px; }
+.planner-field .auto-field-status.warning { color: var(--warn); }
+.auto-field-status a { color: var(--accent); font-weight: 800; }
+.auto-field-status button { justify-self: start; min-height: 44px; padding: 0 12px; border: 1px solid var(--line); background: var(--soft); font-weight: 800; }
+.auto-field-status button:disabled { cursor: not-allowed; opacity: .5; }
 .horizon-note { margin-top: 16px; padding: 12px; border-left: 4px solid var(--accent); background: color-mix(in srgb, var(--accent) 8%, white); font-size: 13px; }
 .horizon-note.tie { border-left-color: var(--warn); background: color-mix(in srgb, var(--warn) 8%, white); }
 .horizon-note div { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }

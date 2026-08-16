@@ -1,12 +1,26 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { SUPPORTED_HORIZONS, TRADING_INSTRUMENTS, calculatePlannedRisk, resolveHoldingHorizon, selectDataSource } from "./dashboard-math.mjs";
+import { OUTSIDE_RESEARCH_SESSION, SUPPORTED_HORIZONS, TRADING_INSTRUMENTS, calculatePlannedRisk, getNewYorkPlannerContext, isQuoteStale, resolveHoldingHorizon, selectDataSource } from "./dashboard-math.mjs";
 
 type View = "planner" | "patterns" | "method";
 type Side = "long" | "short";
 type TradingInstrument = "MNQ" | "NQ";
 type Metric = "p50" | "p80" | "p90";
+
+type NqQuote = {
+  schemaVersion: number;
+  instrument: "NQ";
+  symbol: string;
+  contract: string;
+  price: number;
+  asOf: string;
+  fetchedAt: string;
+  provider: string;
+  providerUrl: string;
+  exchange: string;
+  indicative: boolean;
+};
 
 type SeasonalRow = {
   sourceId: string;
@@ -59,6 +73,7 @@ const NAV: Array<{ id: View; label: string }> = [
 ];
 
 const SESSIONS = ["Asia KZ", "London KZ", "Pre-Market OR", "08:30 OR", "NY AM OR", "NY AM SB", "NY Lunch", "NY PM KZ", "NY 1st DR"];
+const SESSION_OPTIONS = [...SESSIONS, OUTSIDE_RESEARCH_SESSION];
 const SESSION_LABELS: Record<string, string> = {
   "Asia KZ": "Asia window · 20:00–00:00 New York",
   "London KZ": "London window · 02:00–05:00 New York",
@@ -69,11 +84,13 @@ const SESSION_LABELS: Record<string, string> = {
   "NY Lunch": "New York lunch · 11:30–13:30 New York",
   "NY PM KZ": "New York afternoon · 13:30–16:00 New York",
   "NY 1st DR": "New York first dealing range · 09:30–10:30 New York",
+  [OUTSIDE_RESEARCH_SESSION]: "Outside defined research windows",
 };
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-const currentNewYorkMonth = () => new Intl.DateTimeFormat("en-US", { month: "long", timeZone: "America/New_York" }).format(new Date());
+const NQ_QUOTE_URL = "https://raw.githubusercontent.com/DSLegal/VOL/quote-feed/nq-quote.json";
 const fmt = (value: number, digits = 2) => new Intl.NumberFormat("en-GB", { maximumFractionDigits: digits }).format(value);
 const money = (value: number) => new Intl.NumberFormat("en-GB", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(value);
+const quoteTime = (value: string) => new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "America/New_York", timeZoneName: "short" }).format(new Date(value));
 const parseInput = (value: string) => value.trim() === "" ? null : Number(value);
 const isPositive = (value: number | null) => value !== null && Number.isFinite(value) && value > 0;
 const isNonNegative = (value: number | null) => value !== null && Number.isFinite(value) && value >= 0;
@@ -86,7 +103,7 @@ function Toggle<T extends string>({ value, options, onChange, label }: { value: 
   </div>;
 }
 
-function Field({ label, hint, error, children }: { label: React.ReactNode; hint?: string; error?: string; children: React.ReactNode }) {
+function Field({ label, hint, error, children }: { label: React.ReactNode; hint?: React.ReactNode; error?: string; children: React.ReactNode }) {
   return <label className="planner-field"><span>{label}</span>{children}{error ? <small className="field-error" role="alert">{error}</small> : hint ? <small>{hint}</small> : null}</label>;
 }
 
@@ -127,6 +144,7 @@ function QuantileCard({ q, value, observations, ci }: { q: 50 | 80 | 90; value: 
 }
 
 export default function VolatilityDashboard() {
+  const initialContext = getNewYorkPlannerContext();
   const [data, setData] = useState<DashboardData | null>(null);
   const [researchData, setResearchData] = useState<DashboardData | null>(null);
   const [loadError, setLoadError] = useState("");
@@ -135,17 +153,62 @@ export default function VolatilityDashboard() {
   const [instrument, setInstrument] = useState<TradingInstrument>("MNQ");
   const [side, setSide] = useState<Side>("long");
   const [entry, setEntry] = useState("");
+  const [quote, setQuote] = useState<NqQuote | null>(null);
+  const [quoteLoading, setQuoteLoading] = useState(true);
+  const [quoteError, setQuoteError] = useState("");
+  const [quoteTracking, setQuoteTracking] = useState(true);
   const [invalidation, setInvalidation] = useState("");
   const [quantity, setQuantity] = useState("");
   const [riskLimit, setRiskLimit] = useState("");
   const [existingRisk, setExistingRisk] = useState("");
-  const [session, setSession] = useState("NY AM OR");
-  const [period, setPeriod] = useState(currentNewYorkMonth);
+  const [session, setSession] = useState(initialContext.sessionValue);
+  const [period, setPeriod] = useState(initialContext.month);
+  const [plannerContext, setPlannerContext] = useState(initialContext);
+  const [contextTracking, setContextTracking] = useState(true);
   const [holdingTime, setHoldingTime] = useState("5");
   const [confirmedHorizon, setConfirmedHorizon] = useState<number | null>(5);
   const [mnqCost, setMnqCost] = useState("0.5");
   const [nqCost, setNqCost] = useState("1.75");
   const [slippagePoints, setSlippagePoints] = useState("0");
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadQuote = async () => {
+      try {
+        const response = await fetch(`${NQ_QUOTE_URL}?t=${Date.now()}`, { cache: "no-store" });
+        if (!response.ok) throw new Error(`Quote feed returned ${response.status}`);
+        const nextQuote = await response.json() as NqQuote;
+        if (nextQuote.instrument !== "NQ" || !isPositive(nextQuote.price) || !isQuarterPoint(nextQuote.price) || !nextQuote.asOf) {
+          throw new Error("Quote feed returned an invalid NQ price");
+        }
+        if (cancelled) return;
+        setQuote(nextQuote);
+        setQuoteError("");
+        if (quoteTracking) setEntry(String(nextQuote.price));
+      } catch (error) {
+        if (!cancelled) setQuoteError(error instanceof Error ? error.message : "NQ quote did not load");
+      } finally {
+        if (!cancelled) setQuoteLoading(false);
+      }
+    };
+    void loadQuote();
+    const timer = window.setInterval(loadQuote, 60_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [quoteTracking]);
+
+  useEffect(() => {
+    const syncContext = () => {
+      const nextContext = getNewYorkPlannerContext();
+      setPlannerContext(nextContext);
+      if (contextTracking) {
+        setSession(nextContext.sessionValue);
+        setPeriod(nextContext.month);
+      }
+    };
+    syncContext();
+    const timer = window.setInterval(syncContext, 60_000);
+    return () => window.clearInterval(timer);
+  }, [contextTracking]);
 
   useEffect(() => {
     fetch("./data/planner-data.json")
@@ -219,6 +282,18 @@ export default function VolatilityDashboard() {
   }) : null;
   const research = researchData ?? data;
   const researchLoading = view !== "planner" && !researchData && !researchError;
+  const quoteIsStale = quote ? isQuoteStale(quote.asOf) : true;
+  const applyLatestQuote = () => {
+    if (quote) setEntry(String(quote.price));
+    setQuoteTracking(true);
+  };
+  const applyCurrentContext = () => {
+    const nextContext = getNewYorkPlannerContext();
+    setPlannerContext(nextContext);
+    setSession(nextContext.sessionValue);
+    setPeriod(nextContext.month);
+    setContextTracking(true);
+  };
 
   if (loadError) return <main className="load-state"><h1>Dashboard data did not load.</h1><p>{loadError}</p><button type="button" onClick={() => location.reload()}>Try again</button></main>;
   if (!data) return <main className="load-state"><h1>Loading the risk planner</h1><p>Loading the controlled historical extract.</p></main>;
@@ -240,21 +315,21 @@ export default function VolatilityDashboard() {
           <Toggle value={instrument} label="Trading instrument" onChange={setInstrument} options={[{ value: "MNQ", label: "MNQ" }, { value: "NQ", label: "NQ" }]} />
           <Toggle value={side} label="Direction" onChange={setSide} options={[{ value: "long", label: "Long" }, { value: "short", label: "Short" }]} />
           <div className="form-grid">
-            <Field label="Entry price" error={entry ? errors.entry : ""}><input type="number" min="0.25" required value={entry} inputMode="decimal" step="0.25" onChange={event => setEntry(event.target.value)} /></Field>
+            <Field label="Entry price" error={entry ? errors.entry : ""} hint={<span className={`auto-field-status ${quoteIsStale || quoteError ? "warning" : ""}`} aria-live="polite">{quoteLoading && !quote ? "Loading the latest available NQ quote…" : quote ? <>{quoteIsStale ? "Last available" : "Indicative"} {quote.contract} quote from <a href={quote.providerUrl} target="_blank" rel="noreferrer">{quote.provider}</a>: {fmt(quote.price, 2)} at {quoteTime(quote.asOf)}. {quoteTracking ? "Auto-update is on; typing pauses it." : "Auto-update is paused."}{quoteError && " The latest refresh failed, so the previous quote remains displayed."}</> : `Automatic NQ quote unavailable: ${quoteError || "unknown error"}. Enter a price manually.`}<button type="button" disabled={!quote} onClick={() => quoteTracking ? setQuoteTracking(false) : applyLatestQuote()}>{!quote ? "Waiting for quote" : quoteTracking ? "Pause auto-update" : "Use latest and resume"}</button><span>Indicative reference only—verify the executable price with your broker.</span></span>}><input type="number" min="0.25" required value={entry} inputMode="decimal" step="0.25" onChange={event => { setEntry(event.target.value); setQuoteTracking(false); }} /></Field>
             <Field label="Invalidation price" error={invalidation ? errors.invalidation : ""}><input type="number" min="0.25" required value={invalidation} inputMode="decimal" step="0.25" onChange={event => setInvalidation(event.target.value)} /></Field>
             <Field label="Intended quantity" error={quantity ? errors.quantity : ""}><input type="number" min="1" required value={quantity} inputMode="numeric" step="1" onChange={event => setQuantity(event.target.value)} /></Field>
             <Field label="Trade-idea risk limit" error={riskLimit ? errors.riskLimit : ""}><input type="number" min="0.01" required value={riskLimit} inputMode="decimal" step="0.01" onChange={event => setRiskLimit(event.target.value)} /></Field>
             <Field label="Existing same-idea risk" hint="Optional. Use zero when there is no related open risk." error={existingRisk ? errors.existingRisk : ""}><input type="number" min="0" value={existingRisk} inputMode="decimal" step="0.01" onChange={event => setExistingRisk(event.target.value)} /></Field>
             <Field label={`${instrument} cost per side`} hint="Editable assumption. MNQ starts at $0.50; NQ starts at $1.75." error={errors.cost}><input type="number" min="0" value={instrument === "MNQ" ? mnqCost : nqCost} inputMode="decimal" step="0.01" onChange={event => instrument === "MNQ" ? setMnqCost(event.target.value) : setNqCost(event.target.value)} /></Field>
             <Field label="Assumed adverse slippage" hint="Added to distance before dollar exposure is calculated." error={errors.slippage}><input type="number" min="0" value={slippagePoints} inputMode="decimal" step="0.25" onChange={event => setSlippagePoints(event.target.value)} /></Field>
-            <Field label="Planned entry session"><select value={session} onChange={event => setSession(event.target.value)}>{SESSIONS.map(item => <option key={item} value={item}>{SESSION_LABELS[item]}</option>)}</select></Field>
-            <Field label="Planned entry month"><select value={period} onChange={event => setPeriod(event.target.value)}>{MONTHS.map(item => <option key={item}>{item}</option>)}</select></Field>
+            <Field label="Planned entry session" hint={<span className="auto-field-status" aria-live="polite">{contextTracking ? `Auto-selected from New York time (${plannerContext.newYorkTime}).` : "Automatic New York context is paused."}{session === OUTSIDE_RESEARCH_SESSION && " No controlled research window is active."}{!contextTracking && <button type="button" onClick={applyCurrentContext}>Use current context</button>}</span>}><select value={session} onChange={event => { setSession(event.target.value); setContextTracking(false); }}>{SESSION_OPTIONS.map(item => <option key={item} value={item}>{SESSION_LABELS[item]}</option>)}</select></Field>
+            <Field label="Planned entry month" hint={<span className="auto-field-status">{contextTracking ? `Auto-selected in America/New_York (${plannerContext.month}).` : "Manual month selected."}</span>}><select value={period} onChange={event => { setPeriod(event.target.value); setContextTracking(false); }}>{MONTHS.map(item => <option key={item}>{item}</option>)}</select></Field>
             <Field label="Forward adverse-movement horizon" hint="Choose approximately how long the position normally remains exposed." error={errors.holding}><input value={holdingTime} inputMode="decimal" onChange={event => { setHoldingTime(event.target.value); setConfirmedHorizon(null); }} /></Field>
           </div>
           <div className={`horizon-note ${tieRequired || outsideRange ? "tie" : ""}`}><span>No horizon defines the correct invalidation.</span>{horizonResolution.message && <span>{horizonResolution.message}</span>}{tieRequired && <span>Two horizons are equally close. Choose which comparison to display.</span>}{outsideRange && <span>Results are withheld instead of extrapolated beyond the controlled data. Confirm the nearest available reference to continue.</span>}<div aria-label="Available forward adverse-movement horizons">{availableHorizons.map(value => { const confirmationRequired = tieRequired || outsideRange; const enabledForConfirmation = horizonResolution.candidates.includes(value); return <button key={value} type="button" disabled={confirmationRequired && !enabledForConfirmation} className={resolvedHorizon === value ? "active" : ""} aria-pressed={resolvedHorizon === value} onClick={() => { setConfirmedHorizon(value); if (!confirmationRequired) setHoldingTime(String(value)); }}>{value} min</button>; })}</div></div>
         </form>
         <section className="result-stack" aria-live="polite">
-          {!validInputs && <article className="planner-panel empty-result"><h2>No personalized result yet.</h2><p>{evidence && !evidenceSourceValid ? "The selected movement source is not validated for use, so the result is withheld." : "Complete valid entry, invalidation, intended quantity, risk limit, holding time and assumptions before trade-specific calculations appear."}</p></article>}
+          {!validInputs && <article className="planner-panel empty-result"><h2>No personalized result yet.</h2><p>{session === OUTSIDE_RESEARCH_SESSION ? "The current New York time is outside the controlled research windows. Choose the session in which you plan to enter before historical context is shown." : evidence && !evidenceSourceValid ? "The selected movement source is not validated for use, so the result is withheld." : "Complete valid entry, invalidation, intended quantity, risk limit, holding time and assumptions before trade-specific calculations appear."}</p></article>}
           {risk && evidence && resolvedHorizon && <><article className="planner-panel risk-first"><div className="panel-title"><span>2</span><div><h2>Estimated loss if filled at the assumed execution price</h2><p>Calculated from your inputs and editable assumptions.</p></div></div><div className="risk-metrics"><div><span>Distance to invalidation</span><strong>{fmt(distance ?? 0, 2)} pts</strong></div><div><span>Estimated loss per contract</span><strong>{money(risk.riskPerContract)}</strong></div><div><span>Estimated loss for intended quantity</span><strong>{money(risk.plannedRisk)}</strong></div><div><span>Combined trade-idea risk</span><strong>{money(risk.combinedRisk)}</strong></div></div><div className={`budget-line ${risk.withinLimit ? "under" : "over"}`}><strong>{risk.withinLimit ? `${money(risk.differenceFromLimit)} below your entered limit` : `${money(Math.abs(risk.differenceFromLimit))} above your entered limit`}</strong><span>{instrument}: ${fmt(instrumentConfig.dollarsPerPoint, 2)} per point, ${fmt(costValue ?? 0, 2)} per side. Do not move invalidation solely to make the arithmetic fit.</span></div></article><article className="planner-panel evidence-panel"><div className="panel-title"><span>3</span><div><h2>Historical adverse movement</h2><p>NQ data comparison after financial risk is known.</p></div></div><p className="context-copy">Selected context: {period}, {SESSION_LABELS[session]}, {side}, {resolvedHorizon} minutes. Sample: {fmt(evidence.observations, 0)} observations across {fmt(evidence.days, 0)} trading days. Movement history source: {evidence.dataInstrument} ({evidence.sourceId}). Dollar-risk calculation: {instrument}. Data dates {data.meta.firstTimestamp} to {data.meta.lastTimestamp}.</p><QuantileScale row={evidence} invalidationDistance={distance ?? 0} /><div className="quantile-grid"><QuantileCard q={50} value={evidence.p50Points} observations={evidence.observations} ci={ciFor("p50")} /><QuantileCard q={80} value={evidence.p80Points} observations={evidence.observations} ci={ciFor("p80")} /><QuantileCard q={90} value={evidence.p90Points} observations={evidence.observations} ci={ciFor("p90")} /></div><p className="context-copy">This shows historical movement against comparable positions. It does not predict direction, profit potential, stop-hit probability, trade outcome, or the next market move.</p></article></>}
         </section>
       </section>

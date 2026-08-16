@@ -1,0 +1,38 @@
+name: Refresh indicative NQ quote
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nq-quote-feed
+  cancel-in-progress: true
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - name: Fetch and validate the latest available NQ quote
+        run: node scripts/fetch_nq_quote.mjs "$RUNNER_TEMP/nq-quote.json"
+      - name: Publish a one-file quote branch
+        env:
+          QUOTE_FILE: ${{ runner.temp }}/nq-quote.json
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan quote-feed-next
+          git rm -rf .
+          cp "$QUOTE_FILE" nq-quote.json
+          git add nq-quote.json
+          git commit -m "Refresh indicative NQ quote"
+          git push --force origin HEAD:quote-feed
