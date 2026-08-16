@@ -4,6 +4,7 @@ import { extname, join, normalize, resolve, sep } from "node:path";
 
 const root = resolve("github-pages");
 const port = Number(process.env.PORT || 3000);
+const configuredBasePath = `/${String(process.env.BASE_PATH || "VOL").replace(/^\/+|\/+$/g, "")}`;
 
 const contentTypes = {
   ".css": "text/css; charset=utf-8",
@@ -29,7 +30,10 @@ createServer((request, response) => {
     response.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" }).end("Bad request");
     return;
   }
-  const relativePath = normalize(pathname).replace(/^([/\\])+/, "");
+  const effectivePathname = configuredBasePath !== "/" && (pathname === configuredBasePath || pathname.startsWith(`${configuredBasePath}/`))
+    ? pathname.slice(configuredBasePath.length) || "/"
+    : pathname;
+  const relativePath = normalize(effectivePathname).replace(/^([/\\])+/, "");
   let filePath = resolve(root, relativePath || "index.html");
 
   if (filePath !== root && !filePath.startsWith(`${root}${sep}`)) {

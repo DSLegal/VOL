@@ -2,14 +2,14 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Historical Volatility Stop-Loss Lab",
-  description: "Explore NQ historical adverse excursion by session, month, ISO week and regime, then translate an independently defined stop to MNQ risk.",
+  title: "VOL NQ/MNQ Risk Planner",
+  description: "Plan NQ or MNQ financial exposure from a trader-defined entry and invalidation, then compare that distance with historical NQ adverse movement.",
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"),
   openGraph: {
-    title: "Historical Volatility Stop-Loss Lab",
-    description: "Session · Month · Week · Regime",
+    title: "VOL NQ/MNQ Risk Planner",
+    description: "Risk-first NQ and MNQ planning with neutral historical adverse-movement references.",
     type: "website",
-    images: [{ url: "/og.png", width: 1200, height: 630, alt: "Historical Volatility Stop-Loss Lab" }],
+    images: [{ url: "/og.png", width: 1200, height: 630, alt: "VOL NQ/MNQ Risk Planner" }],
   },
   icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
 };

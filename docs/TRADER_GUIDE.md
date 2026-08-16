@@ -1,84 +1,80 @@
-# Trader guide: what the volatility report is saying
+# Trader Guide
 
-## The simple idea
+## The Simple Idea
 
-A stop-loss should normally sit where the trade idea is proven wrong. But a technically valid stop can still be so close that ordinary market movement reaches it repeatedly.
+Start with your own trade plan. Mark the entry, the price that invalidates the idea, the intended quantity and the amount of risk you are willing to commit to that trade idea.
 
-This dashboard provides a second lens: after you define the stop from market structure, compare that distance with the amount of adverse movement that has historically occurred in the same session, month or week-of-year.
+The planner then does two separate jobs:
 
-It is a comparison tool, not an automatic stop generator.
+- It estimates the dollar loss if the trade reaches the entered invalidation with the execution assumptions shown on screen.
+- It compares the invalidation distance with historical NQ adverse movement for the selected month, session, direction and horizon.
 
-## What P50, P80 and P90 mean
+It is a comparison tool. It does not choose an invalidation price, choose quantity, provide a signal, predict profit potential, or predict the next market move.
 
-The report measures maximum adverse excursion: the furthest price moved against a hypothetical entry during the selected forward adverse-movement horizon. The supported horizons are 1, 3, 5, 10, 15 and 30 minutes, with 5 minutes as the default short-term scalper view.
+## What P50, P80 and P90 Mean
 
-- P50 is the middle historical observation. Half of measured excursions were smaller and half were larger.
-- P80 is a wider-noise reference. Eighty per cent of measured excursions were at or below it, while twenty per cent were larger.
-- P90 is tail context. Ten per cent of measured excursions were larger.
+The report measures maximum adverse excursion: the furthest price moved against a hypothetical entry during the selected forward adverse-movement horizon.
 
-These levels do not say where price will move next. They describe the distribution of what happened in the measured history.
+- P50: half of selected historical observations were at or below this distance; half were above.
+- P80: eight in ten selected historical observations were at or below this distance; two in ten were above.
+- P90: nine in ten selected historical observations were at or below this distance; one in ten was above.
 
-## Why there are both points and ATR-normalised results
+These are historical reference points, not probabilities for the next trade.
 
-Raw points answer: “How many NQ points did price move?” This is intuitive for placing an actual stop.
+The selected directional month slice shows its own observation and trading-day
+counts. If the controlled analysis did not produce an interval for that exact
+slice, the app identifies the broader all-month, pooled-direction session
+estimate and interval separately. It does not relabel that broader interval as
+uncertainty around the selected directional result.
 
-ATR-normalised results answer: “How large was that move compared with the normal movement of this session?” This matters because NQ’s price and point ranges changed substantially between 2010 and 2026. A 10-point move in an earlier period does not represent the same market condition as a 10-point move today.
+## Horizon
 
-Use points for the final distance comparison. Use ATR-normalised results to compare different years, months, weeks and sessions more fairly.
+The supported forward adverse-movement horizons are 1, 3, 5, 10, 15 and 30 minutes. Five minutes is the initial short-term reference.
 
-## Headline findings
+Use the horizon that is closest to the time the position normally remains exposed. If a holding time is equally close to two supported horizons, the planner asks you to choose one. It does not interpolate between horizons.
 
-In the headline five-minute, pooled-direction NY AM OR slice:
+No horizon defines the correct invalidation.
 
-- March had a raw monthly P80 of 27.0 NQ points, based on 298 eligible trading days.
-- October had the highest monthly ATR-normalised P80 at 2.458 times session ATR.
-- February had the lowest at 2.390 times session ATR.
-- The monthly confidence intervals overlap substantially. The small difference between October and February should not be treated as a reliable calendar trading edge.
+## Financial Risk
 
-Across ISO week numbers:
+The app estimates exposure from the trader's entered plan.
 
-- Week 40 had the highest headline ATR-normalised P80 at 2.614, with a 95% confidence interval of 2.492 to 2.735 and 71 eligible days.
-- Week 27 had the lowest at 2.243, with a 95% confidence interval of 2.140 to 2.344 and 71 eligible days.
-- Week 53 has limited history and deserves extra caution.
+For MNQ:
 
-The main practical finding is not that one month or week is “best.” It is that volatility changes across sessions and regimes, while many calendar differences remain uncertain.
+`estimated loss per contract = ((invalidation distance + assumed slippage) x $2) + editable round-trip cost`
 
-## A sensible dashboard workflow
+Default MNQ cost is `$0.50` per side.
 
-1. Define the price structure that invalidates the trade idea.
-2. Measure the stop distance in NQ/MNQ points.
-3. Select the matching session, forward adverse-movement horizon, direction and calendar period.
-4. Compare the independent stop with P50, P80 and P90 historical adverse excursion.
-5. Check the rolling regime view. If recent normalised volatility has shifted, give less weight to the all-years seasonal pool.
-6. Translate the stop to MNQ risk only after the distance has been defined.
+For NQ:
 
-The horizon is only a comparison window. It does not define the correct stop.
+`estimated loss per contract = ((invalidation distance + assumed slippage) x $20) + editable round-trip cost`
 
-For MNQ, the dashboard defaults to $0.50 per side and uses:
+Default NQ cost is `$1.75` per side.
 
-`risk per contract = ($2 × stop distance in points) + $1.00 default round-trip cost`
+The app then multiplies by the intended quantity and adds existing risk already committed to the same trade idea. It shows the difference from the risk limit you entered. It does not calculate how many contracts to trade.
 
-For NQ, the dashboard defaults to $1.75 per side and uses:
+Actual loss can exceed the estimate because of slippage, thin liquidity, news, gaps, platform behavior or fills beyond the entered invalidation.
 
-`risk per contract = ($20 × stop distance in points) + $3.50 default round-trip cost`
+## Source Hierarchy
 
-`whole contracts = floor(risk budget ÷ risk per contract)`
+Historical movement source order:
 
-This is arithmetic, not a recommendation.
+- NQ primary source.
+- MNQ fallback only when the fallback is controlled and validated for the context.
+- US100 fallback only when the fallback is controlled and validated for the context.
 
-## How to read uncertainty and sample size
+The app does not silently blend sources. Every result names the movement source separately from the trading instrument used for dollar calculations.
 
-The number of trading days is more important than the number of one-minute rows because nearby rows from the same day are related. Confidence intervals therefore resample whole trading days rather than pretending every row is independent.
+## Sensible Workflow
 
-Treat comparisons cautiously when:
+1. Define the chart structure that invalidates the trade idea.
+2. Enter NQ or MNQ, side, entry, invalidation, intended quantity and risk limit.
+3. Add costs, slippage and any existing risk on the same trade idea.
+4. Choose the planned session, month and forward adverse-movement horizon.
+5. Read the financial risk first.
+6. Compare the invalidation distance with P50, P80 and P90 historical references.
+7. Decide outside the app whether to keep the plan, reduce quantity, improve entry, or skip the trade.
 
-- a period has fewer than 40 eligible days;
-- confidence intervals overlap;
-- a result relies on the short 17-day NQ/MNQ contract overlap;
-- a result is labelled as fallback or proxy data rather than primary NQ history;
-- execution results contain copied or closely related accounts;
-- a rolling window overlaps heavily with the previous point.
+## What This Analysis Cannot Tell You
 
-## What this analysis cannot tell you
-
-It cannot identify the correct stop for a setup, predict whether a trade will win, prove a calendar edge, reconstruct an unrecorded stop order or determine an optimal position size. Slippage, liquidity, news, entry quality and the trader’s actual invalidation logic remain outside the historical noise measurement.
+It cannot identify the correct invalidation, predict whether a trade will win, prove a calendar edge, reconstruct an unrecorded order, determine an optimal quantity, or account for all execution conditions. Entry quality, liquidity, news, discipline and the trader's own reasoning remain outside the historical measurement.

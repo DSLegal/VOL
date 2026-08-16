@@ -41,6 +41,8 @@ SOURCE_HIERARCHY = (
         "role": "primary",
         "status": "available",
         "available": True,
+        "validated": True,
+        "comparabilityApproved": True,
         "fallbackLevel": 0,
         "notes": "Primary source for adverse-movement evidence.",
     },
@@ -51,6 +53,8 @@ SOURCE_HIERARCHY = (
         "role": "first fallback",
         "status": "limited overlap validation only",
         "available": False,
+        "validated": False,
+        "comparabilityApproved": False,
         "fallbackLevel": 1,
         "notes": "Retained as a fallback concept and overlap check; not used while primary NQ is available.",
     },
@@ -61,6 +65,9 @@ SOURCE_HIERARCHY = (
         "role": "final fallback",
         "status": "not available in the current controlled outputs",
         "available": False,
+        "validated": False,
+        "comparabilityApproved": False,
+        "provider": "",
         "fallbackLevel": 2,
         "notes": "Reserved for future fallback only.",
     },
@@ -678,14 +685,15 @@ def build(source: Path, bootstrap_reps: int | None = None, previous_payload: dic
     session_ci = []
     if has_controlled_csvs:
         for row in read_csv(source / "bootstrap_confidence_intervals.csv"):
-            if row["source_id"] != "NQ_long_history" or row["roll_rule"] != "confirmed_volume_crossover" or number(row["horizon_minutes"], True) not in SUPPORTED_HORIZONS or row["direction"] != "pooled" or row["metric"] not in {"p50", "p80", "p90"}:
+            if row["source_id"] != "NQ_long_history" or row["roll_rule"] != "confirmed_volume_crossover" or number(row["horizon_minutes"], True) not in SUPPORTED_HORIZONS or row["direction"] != "pooled" or row["metric"] not in {"median", "p50", "p80", "p90"}:
                 continue
+            metric = "p50" if row["metric"] == "median" else row["metric"]
             session_ci.append({
                 "sourceId": row["source_id"],
                 "horizon": number(row["horizon_minutes"], True),
                 "session": row["session"],
                 "unit": row["unit"],
-                "metric": row["metric"],
+                "metric": metric,
                 "estimate": number(row["estimate"]),
                 "low": number(row["ci_95_low"]),
                 "high": number(row["ci_95_high"]),
@@ -866,7 +874,7 @@ def build(source: Path, bootstrap_reps: int | None = None, previous_payload: dic
             "bootstrapReplications": bootstrap_reps or 10_000,
             "seed": 20_260_811,
             "verifiedFiles": len(verified),
-            "disclaimer": "Historical market-noise context only. This does not define a strategy stop, forecast, trading signal or optimal position size.",
+            "disclaimer": "Historical market context only. This does not choose invalidation, forecast, provide a signal or determine quantity.",
             "supportedHorizons": sorted(SUPPORTED_HORIZONS),
             "defaultHorizon": 5,
             "dataSourceFallback": DATA_SOURCE_FALLBACK,
@@ -895,6 +903,25 @@ def build(source: Path, bootstrap_reps: int | None = None, previous_payload: dic
     }
 
 
+def build_planner_payload(payload: dict) -> dict:
+    """Keep the default planning route independent from the larger research data."""
+    return {
+        "meta": payload["meta"],
+        "seasonal": [
+            row for row in payload["seasonal"]
+            if row.get("periodType") == "month"
+        ],
+        "seasonalCI": [
+            row for row in payload["seasonalCI"]
+            if row.get("periodType") == "month" and row.get("unit") == "points"
+        ],
+        "sessionCI": [
+            row for row in payload["sessionCI"]
+            if row.get("unit") == "points"
+        ],
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     workspace = Path(__file__).resolve().parents[2]
@@ -908,6 +935,10 @@ def main() -> None:
     previous_payload = json.loads(args.output.read_text(encoding="utf-8")) if args.output.exists() else None
     payload = build(args.source.resolve(), bootstrap_reps=args.bootstrap_reps, previous_payload=previous_payload)
     args.output.write_text(json.dumps(json_ready(payload), separators=(",", ":")), encoding="utf-8")
+    if args.output.name == "dashboard-data.json":
+        planner_output = args.output.with_name("planner-data.json")
+        planner_output.write_text(json.dumps(json_ready(build_planner_payload(payload)), separators=(",", ":")), encoding="utf-8")
+        print(f"Wrote {planner_output} ({planner_output.stat().st_size:,} bytes)")
     print(f"Wrote {args.output} ({args.output.stat().st_size:,} bytes)")
 
 

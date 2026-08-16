@@ -1,8 +1,17 @@
 import assert from "node:assert/strict";
-import { readFile, stat } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { calculateContractRisk, nearestHorizons, selectDataSource, SUPPORTED_HORIZONS } from "../components/dashboard-math.mjs";
+import {
+  calculatePlannedRisk,
+  deriveInvalidationDistance,
+  isQuarterPoint,
+  nearestHorizons,
+  resolveHoldingHorizon,
+  selectDataSource,
+  SUPPORTED_HORIZONS,
+  TRADING_INSTRUMENTS,
+} from "../components/dashboard-math.mjs";
 
 test("holding-time mapping preserves nearest-horizon ties", () => {
   assert.deepEqual(SUPPORTED_HORIZONS, [1, 3, 5, 10, 15, 30]);
@@ -11,58 +20,94 @@ test("holding-time mapping preserves nearest-horizon ties", () => {
   assert.deepEqual(nearestHorizons(8), [10]);
   assert.deepEqual(nearestHorizons(22.5), [15, 30]);
   assert.deepEqual(nearestHorizons(0), []);
+  assert.equal(resolveHoldingHorizon(60).status, "outside-range");
+  assert.deepEqual(resolveHoldingHorizon(22.5).candidates, [15, 30]);
+  assert.equal(resolveHoldingHorizon(22.5).resolvedHorizon, null);
+  assert.equal(resolveHoldingHorizon(22.5, SUPPORTED_HORIZONS, 30).resolvedHorizon, 30);
 });
 
-test("NQ and MNQ arithmetic uses per-side costs and correct multipliers", () => {
-  assert.deepEqual(calculateContractRisk({ stopPoints: 18, dollarsPerPoint: 2, costPerSide: 0.5, riskBudget: 150 }), {
-    roundTripCost: 1, riskPerContract: 37, wholeContracts: 4, usedRisk: 148, unallocatedRisk: 2,
+test("entry and invalidation validation derives distance without rounding", () => {
+  assert.equal(isQuarterPoint(17500.25), true);
+  assert.equal(isQuarterPoint(17500.1), false);
+  assert.deepEqual(deriveInvalidationDistance({ side: "long", entry: 17500, invalidation: 17482 }), { ok: true, distance: 18, message: "" });
+  assert.deepEqual(deriveInvalidationDistance({ side: "short", entry: 17500, invalidation: 17518 }), { ok: true, distance: 18, message: "" });
+  assert.equal(deriveInvalidationDistance({ side: "long", entry: 17500, invalidation: 17501 }).ok, false);
+  assert.equal(deriveInvalidationDistance({ side: "short", entry: 17500, invalidation: 17499 }).ok, false);
+});
+
+test("NQ and MNQ arithmetic uses intended quantity, per-side costs and slippage", () => {
+  assert.deepEqual(TRADING_INSTRUMENTS.MNQ, { dollarsPerPoint: 2, defaultCostPerSide: 0.5 });
+  assert.deepEqual(TRADING_INSTRUMENTS.NQ, { dollarsPerPoint: 20, defaultCostPerSide: 1.75 });
+  assert.deepEqual(calculatePlannedRisk({ stopPoints: 18, dollarsPerPoint: 2, costPerSide: 0.5, slippagePoints: 0.5, quantity: 3, riskLimit: 150, existingRisk: 20 }), {
+    roundTripCost: 1,
+    riskPerContract: 38,
+    plannedRisk: 114,
+    combinedRisk: 134,
+    differenceFromLimit: 16,
+    withinLimit: true,
   });
-  assert.deepEqual(calculateContractRisk({ stopPoints: 18, dollarsPerPoint: 20, costPerSide: 1.75, riskBudget: 500 }), {
-    roundTripCost: 3.5, riskPerContract: 363.5, wholeContracts: 1, usedRisk: 363.5, unallocatedRisk: 136.5,
+  assert.deepEqual(calculatePlannedRisk({ stopPoints: 18, dollarsPerPoint: 20, costPerSide: 1.75, slippagePoints: 0, quantity: 2, riskLimit: 500, existingRisk: 0 }), {
+    roundTripCost: 3.5,
+    riskPerContract: 363.5,
+    plannedRisk: 727,
+    combinedRisk: 727,
+    differenceFromLimit: -227,
+    withinLimit: false,
   });
 });
 
-test("data-source selection follows NQ then MNQ then US100 without blending", () => {
+test("data-source selection withholds unvalidated fallbacks and never blends", () => {
   const sources = [
-    { instrument: "US100", rank: 3, available: true },
-    { instrument: "MNQ", rank: 2, available: true },
-    { instrument: "NQ", rank: 1, available: false },
+    { instrument: "US100", rank: 3, available: true, status: "validated comparability approved", sourceId: "US100", provider: "" },
+    { instrument: "MNQ", rank: 2, available: true, status: "limited overlap validation only" },
+    { instrument: "NQ", rank: 1, available: false, status: "available" },
   ];
-  assert.equal(selectDataSource(sources)?.instrument, "MNQ");
-  assert.equal(selectDataSource(sources.filter(source => source.instrument === "US100"))?.instrument, "US100");
+  assert.equal(selectDataSource(sources), null);
+  assert.equal(selectDataSource(sources.filter(source => source.instrument === "US100")), null);
+  assert.equal(selectDataSource([{ instrument: "MNQ", rank: 2, available: true, status: "validated comparability approved" }])?.instrument, "MNQ");
+  assert.equal(selectDataSource([{ instrument: "MNQ", rank: 2, available: true, comparabilityApproved: true }])?.instrument, "MNQ");
+  assert.equal(selectDataSource([{ instrument: "NQ", rank: 1, available: true, status: "available" }, ...sources])?.instrument, "NQ");
+  assert.equal(selectDataSource(sources.filter(source => source.instrument === "US100")), null);
+  assert.equal(selectDataSource([{ instrument: "US100", rank: 3, available: true, status: "validated comparability approved", sourceId: "US100_CFD_TwelveData", provider: "Twelve Data" }])?.instrument, "US100");
   assert.equal(selectDataSource(sources.map(source => ({ ...source, available: false }))), null);
 });
 
-test("vinext server renders the finished dashboard shell", async () => {
-  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
-  workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
-  const { default: worker } = await import(workerUrl.href);
-  const response = await worker.fetch(new Request("http://localhost/", { headers: { accept: "text/html" } }), { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } }, { waitUntil() {}, passThroughOnException() {} });
-  assert.equal(response.status, 200);
-  const html = await response.text();
-  assert.match(html, /Historical Volatility Stop-Loss Lab/);
-  assert.match(html, /Preparing the volatility lab/);
-  assert.doesNotMatch(html, /Your site is taking shape|SkeletonPreview/);
+test("vinext build emits the production app package", async () => {
+  const [serverEntry, serverConfig, serverAssets, ssrAssets] = await Promise.all([
+    readFile(new URL("../dist/server/index.js", import.meta.url), "utf8"),
+    readFile(new URL("../dist/server/vinext-server.json", import.meta.url), "utf8"),
+    readFile(new URL("../dist/server/vinext-client-assets.js", import.meta.url), "utf8"),
+    readFile(new URL("../dist/server/ssr/vinext-client-assets.js", import.meta.url), "utf8"),
+  ]);
+  assert.match(serverEntry, /fetch/);
+  assert.match(JSON.parse(serverConfig).prerenderSecret, /^[a-f0-9]{64}$/);
+  assert.match(serverAssets, /VolatilityDashboard/);
+  assert.match(ssrAssets, /VolatilityDashboard/);
 });
 
-test("static GitHub Pages build contains the app and controlled data", async () => {
-  const [html, dataText, assetFiles] = await Promise.all([
+test("static GitHub Pages build contains the app and split controlled data", async () => {
+  const [html, dataText, plannerText, assetFiles] = await Promise.all([
     readFile(new URL("../github-pages/index.html", import.meta.url), "utf8"),
     readFile(new URL("../github-pages/data/dashboard-data.json", import.meta.url), "utf8"),
+    readFile(new URL("../github-pages/data/planner-data.json", import.meta.url), "utf8"),
     stat(new URL("../github-pages/assets", import.meta.url)),
   ]);
-  assert.match(html, /Historical Volatility Stop-Loss Lab/);
+  assert.match(html, /VOL NQ\/MNQ Risk Planner/);
   assert.equal(assetFiles.isDirectory(), true);
   const data = JSON.parse(dataText);
+  const planner = JSON.parse(plannerText);
   assert.equal(data.meta.records, 6_486_332);
   assert.equal(data.meta.bootstrapReplications, 10_000);
-  assert.ok(data.seasonal.length > 3_000);
   assert.ok(data.chronological.length > 7_000);
-  assert.ok(data.claims.length > 10);
   assert.deepEqual(data.meta.supportedHorizons, [1, 3, 5, 10, 15, 30]);
-  assert.equal(data.meta.defaultHorizon, 5);
-  assert.equal(data.meta.tradingInstruments.MNQ.defaultCostPerSide, 0.5);
-  assert.equal(data.meta.tradingInstruments.NQ.defaultCostPerSide, 1.75);
+  assert.deepEqual(planner.meta.supportedHorizons, [1, 3, 5, 10, 15, 30]);
+  assert.ok(planner.seasonal.every(row => row.periodType === "month"));
+  assert.ok(planner.seasonalCI.every(row => row.periodType === "month" && row.unit === "points"));
+  assert.deepEqual([...new Set(planner.sessionCI.map(row => row.metric))].sort(), ["p50", "p80", "p90"]);
+  assert.deepEqual([...new Set(planner.sessionCI.map(row => row.horizon))].sort((a, b) => a - b), [1, 3, 5, 10, 15, 30]);
+  assert.ok(plannerText.length < dataText.length / 10);
+  assert.equal(planner.meta.tradingInstruments.MNQ.defaultCostPerSide, 0.5);
+  assert.equal(planner.meta.tradingInstruments.NQ.defaultCostPerSide, 1.75);
 });
 
 test("expanded horizon data and evidence remain present", async () => {
@@ -86,16 +131,22 @@ test("expanded horizon data and evidence remain present", async () => {
 test("dashboard source includes the trader-facing controls and warnings", async () => {
   const source = await readFile(new URL("../components/VolatilityDashboard.tsx", import.meta.url), "utf8");
   assert.match(source, /Forward adverse-movement horizon/);
+  assert.match(source, /planner-data\.json/);
   assert.match(source, /Choose approximately how long the position normally remains exposed/);
-  assert.match(source, /Historical horizons provide comparison windows\. No horizon defines the correct stop/);
-  assert.match(source, /Nearest available horizon/);
+  assert.match(source, /No personalized result yet/);
+  assert.match(source, /Actual loss can exceed this estimate/);
+  assert.match(source, /Intended quantity/);
   assert.match(source, /MNQ.*0\.5/s);
   assert.match(source, /NQ.*1\.75/s);
+  assert.doesNotMatch(source, /Maximum contracts|Arithmetic capacity|recommended size|safe stop|normal pullback|breathing room|Wider pullback|Extreme pullback|Will your stop survive/);
 });
 
-test("local static server rejects malformed encoded URLs", async () => {
+test("local static server handles GitHub Pages base-path assets and rejects malformed encoded URLs", async () => {
   const { spawn } = await import("node:child_process");
   const port = 3199;
+  const assets = await readdir(new URL("../github-pages/assets", import.meta.url));
+  const jsAsset = assets.find(file => file.endsWith(".js"));
+  assert.ok(jsAsset);
   const child = spawn(process.execPath, ["scripts/serve-static.mjs"], {
     cwd: fileURLToPath(new URL("..", import.meta.url)),
     env: { ...process.env, PORT: String(port) },
@@ -112,8 +163,16 @@ test("local static server rejects malformed encoded URLs", async () => {
     child.on("exit", code => reject(new Error(`server exited with ${code}`)));
   });
   try {
-    const response = await fetch(`http://127.0.0.1:${port}/%`);
-    assert.equal(response.status, 400);
+    const [basePage, baseAsset, malformed] = await Promise.all([
+      fetch(`http://127.0.0.1:${port}/VOL/`),
+      fetch(`http://127.0.0.1:${port}/VOL/assets/${jsAsset}`),
+      fetch(`http://127.0.0.1:${port}/%`),
+    ]);
+    assert.equal(basePage.status, 200);
+    assert.match(await basePage.text(), /VOL NQ\/MNQ Risk Planner/);
+    assert.equal(baseAsset.status, 200);
+    assert.match(baseAsset.headers.get("content-type") ?? "", /javascript/);
+    assert.equal(malformed.status, 400);
   } finally {
     child.kill();
   }
