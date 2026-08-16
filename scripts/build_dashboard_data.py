@@ -645,6 +645,7 @@ def build(source: Path, bootstrap_reps: int | None = None, previous_payload: dic
                 "order": number(row["period_order"], True),
                 "horizon": number(row["horizon_minutes"], True),
                 "session": row["session"],
+                "direction": row["direction"],
                 "unit": row["unit"],
                 "metric": row["metric"],
                 "estimate": number(row["estimate"]),
@@ -662,6 +663,7 @@ def build(source: Path, bootstrap_reps: int | None = None, previous_payload: dic
             session_metrics.append({
                 "sourceId": row["source_id"],
                 "dataInstrument": "NQ",
+                "sourceRank": 1,
                 "horizon": number(row["horizon_minutes"], True),
                 "session": row["session"],
                 "direction": row["direction"],
@@ -837,6 +839,18 @@ def build(source: Path, bootstrap_reps: int | None = None, previous_payload: dic
     generated_at = output_manifest.get("generated_at_utc") or output_manifest.get("generatedAt") or output_manifest.get("analysisGeneratedAt")
     if not generated_at:
         generated_at = pd.Timestamp.now(tz=timezone.utc).isoformat() if pd is not None else ""
+    overlap_days = [row["days"] for row in overlap if row.get("days") is not None]
+    overlap_ratios = [row["ratio"] for row in overlap if row.get("ratio") is not None]
+    fallback_comparability = {
+        "pair": "NQ/MNQ",
+        "validationHorizonMinutes": 5,
+        "commonDaysMinimum": min(overlap_days) if overlap_days else 0,
+        "commonDaysMaximum": max(overlap_days) if overlap_days else 0,
+        "p80RatioMinimum": min(overlap_ratios) if overlap_ratios else None,
+        "p80RatioMaximum": max(overlap_ratios) if overlap_ratios else None,
+        "status": "limited overlap validation; fallback must remain explicitly labelled",
+        "us100Status": "no controlled US100 source supplied",
+    }
 
     return {
         "meta": {
@@ -856,6 +870,7 @@ def build(source: Path, bootstrap_reps: int | None = None, previous_payload: dic
             "supportedHorizons": sorted(SUPPORTED_HORIZONS),
             "defaultHorizon": 5,
             "dataSourceFallback": DATA_SOURCE_FALLBACK,
+            "fallbackComparability": fallback_comparability,
             "activeDataSource": _source_metadata(),
             "tradingInstruments": {
                 "MNQ": {"dollarsPerPoint": 2, "defaultCostPerSide": 0.5, "defaultRoundTripCost": 1.0},

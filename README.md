@@ -33,8 +33,12 @@ only want to serve an already-built static dashboard, use `npm run preview`. For
 full source hot reloading on a machine that permits native Node build modules,
 use `npm run dev:vinext`.
 
-The same commands work in PowerShell, Command Prompt, macOS and Linux. On a
-fresh checkout, always run `npm ci` before starting the development server.
+The same commands work in PowerShell, Command Prompt, macOS and Linux. If
+PowerShell reports that `npm.ps1` cannot run because script execution is
+disabled, use the Windows command shim instead: `npm.cmd ci`, followed by
+`npm.cmd run dev`. This does not require changing the machine's execution
+policy. On a fresh checkout, always install dependencies before starting the
+development server.
 
 To verify both the application and the GitHub Pages build:
 
@@ -59,7 +63,7 @@ The published address will normally be `https://<account>.github.io/<repository>
 
 ## Data lineage and regeneration
 
-The committed browser dataset is `public/data/dashboard-data.json`. It was built from the controlled output folder `../nq_long_history_outputs` and verified against `generated_output_manifest.json` before export.
+The committed browser dataset is `public/data/dashboard-data.json`. The six-horizon extract is built from `../nq_long_history_outputs_horizons` (falling back to the legacy `../nq_long_history_outputs` location) and verified against `generated_output_manifest.json` before export.
 
 The intended data-source hierarchy is NQ first, MNQ second, then US100. The
 current long-history browser extract uses NQ as the primary data instrument and
