@@ -27,8 +27,8 @@ jobs:
           cache: npm
       - name: Install exact dependencies
         run: npm ci
-      - name: Build static dashboard
-        run: npm run build:github
+      - name: Run quality gates
+        run: npm test
       - name: Configure Pages
         uses: actions/configure-pages@v5
       - name: Upload Pages artifact

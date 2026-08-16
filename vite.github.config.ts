@@ -10,6 +10,6 @@ export default defineConfig({
   build: {
     outDir: resolve(import.meta.dirname, "github-pages"),
     emptyOutDir: true,
-    sourcemap: true,
+    sourcemap: false,
   },
 });

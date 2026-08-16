@@ -10,7 +10,7 @@ It is a comparison tool, not an automatic stop generator.
 
 ## What P50, P80 and P90 mean
 
-The report measures maximum adverse excursion: the furthest price moved against a hypothetical entry during the next five or ten minutes.
+The report measures maximum adverse excursion: the furthest price moved against a hypothetical entry during the selected forward adverse-movement horizon. The supported horizons are 1, 3, 5, 10, 15 and 30 minutes, with 5 minutes as the default short-term scalper view.
 
 - P50 is the middle historical observation. Half of measured excursions were smaller and half were larger.
 - P80 is a wider-noise reference. Eighty per cent of measured excursions were at or below it, while twenty per cent were larger.
@@ -47,14 +47,20 @@ The main practical finding is not that one month or week is “best.” It is th
 
 1. Define the price structure that invalidates the trade idea.
 2. Measure the stop distance in NQ/MNQ points.
-3. Select the matching session, entry horizon, direction and calendar period.
+3. Select the matching session, forward adverse-movement horizon, direction and calendar period.
 4. Compare the independent stop with P50, P80 and P90 historical adverse excursion.
 5. Check the rolling regime view. If recent normalised volatility has shifted, give less weight to the all-years seasonal pool.
 6. Translate the stop to MNQ risk only after the distance has been defined.
 
-For MNQ, the dashboard uses:
+The horizon is only a comparison window. It does not define the correct stop.
 
-`risk per contract = ($2 × stop distance in points) + round-trip cost`
+For MNQ, the dashboard defaults to $0.50 per side and uses:
+
+`risk per contract = ($2 × stop distance in points) + $1.00 default round-trip cost`
+
+For NQ, the dashboard defaults to $1.75 per side and uses:
+
+`risk per contract = ($20 × stop distance in points) + $3.50 default round-trip cost`
 
 `whole contracts = floor(risk budget ÷ risk per contract)`
 
@@ -69,6 +75,7 @@ Treat comparisons cautiously when:
 - a period has fewer than 40 eligible days;
 - confidence intervals overlap;
 - a result relies on the short 17-day NQ/MNQ contract overlap;
+- a result is labelled as fallback or proxy data rather than primary NQ history;
 - execution results contain copied or closely related accounts;
 - a rolling window overlaps heavily with the previous point.
 

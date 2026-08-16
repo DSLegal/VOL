@@ -12,6 +12,8 @@
 
 # testing
 /coverage
+*.tsbuildinfo
+__pycache__/
 
 # next.js
 /.next/
@@ -20,6 +22,8 @@
 
 # misc
 .DS_Store
+._*
+*.tsbuildinfo
 *.pem
 
 # debug
