@@ -1,6 +1,11 @@
 name: Refresh indicative NQ quote
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/nq-quote.yml
+      - scripts/fetch_nq_quote.mjs
   schedule:
     - cron: "*/5 * * * *"
   workflow_dispatch:
