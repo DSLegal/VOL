@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "instrument": "NQ",
+  "symbol": "NQ=F",
+  "contract": "Nasdaq 100 Sep 26",
+  "price": 29565.25,
+  "asOf": "2026-09-06T22:06:22.000Z",
+  "fetchedAt": "2026-09-06T22:16:27.248Z",
+  "provider": "Yahoo Finance",
+  "providerUrl": "https://finance.yahoo.com/quote/NQ=F/",
+  "exchange": "CME",
+  "indicative": true
+}
